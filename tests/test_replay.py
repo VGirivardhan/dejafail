@@ -106,3 +106,94 @@ def test_replay_aborted_carries_step_index_and_reason():
     assert exc.step_index == 2
     assert exc.reason == "memory arm: unavailable: Groq unreachable"
     assert "Groq unreachable" in str(exc)
+
+
+def test_unavailable_llm_on_run_two_aborts_after_one_step():
+    import pytest
+
+    from dejafail.llm import LLMUnavailable
+    from dejafail.replay import ReplayAborted
+
+    store = FakeStore()
+    llm = FakeLLM([_verdict("flaky"), _verdict("flaky"),
+                   LLMUnavailable("Groq request failed: 429 rate limit"), _verdict("flaky")])
+    seen = []
+    with pytest.raises(ReplayAborted) as exc:
+        replay([_run(1, 7), _run(2, 8), _run(3, 9)], Triage(llm, store), store, on_step=seen.append)
+    assert exc.value.step_index == 2
+    assert "memory arm" in exc.value.reason and "429 rate limit" in exc.value.reason
+    assert [s.run_id for s in seen] == ["run-1"]
+    assert len(store.records) == 2  # run 2 was never taught to memory
+
+
+def test_unavailable_stateless_arm_aborts_and_is_named():
+    import pytest
+
+    from dejafail.llm import LLMUnavailable
+    from dejafail.replay import ReplayAborted
+
+    store = FakeStore()
+    llm = FakeLLM([_verdict("flaky"), LLMUnavailable("Groq unreachable: timed out")])
+    with pytest.raises(ReplayAborted) as exc:
+        replay([_run(1, 7)], Triage(llm, store), store)
+    assert exc.value.step_index == 1
+    assert "stateless arm" in exc.value.reason and "timed out" in exc.value.reason
+    assert store.records == []
+
+
+def test_recall_failure_aborts_instead_of_scoring_a_stateless_answer():
+    import pytest
+
+    from dejafail.memory import MemoryUnavailable
+    from dejafail.replay import ReplayAborted
+
+    class RecallDown(FakeStore):
+        def history(self, sig, limit=12):
+            raise MemoryUnavailable("Hindsight unreachable (ConnectError).")
+
+    store = RecallDown()
+    llm = FakeLLM([_verdict("flaky"), _verdict("flaky")])
+    seen = []
+    with pytest.raises(ReplayAborted) as exc:
+        replay([_run(1, 7), _run(2, 8)], Triage(llm, store), store, on_step=seen.append)
+    assert exc.value.step_index == 1
+    assert "recall" in exc.value.reason and "ConnectError" in exc.value.reason
+    assert seen == [] and store.records == []
+
+
+def test_invalid_output_arm_is_scored_unknown_and_flagged():
+    from dejafail.llm import LLMOutputError
+
+    store = FakeStore()
+    llm = FakeLLM([LLMOutputError("no JSON object in model output"), _verdict("flaky"),
+                   _verdict("flaky"), LLMOutputError("kind must be one of flaky")])
+    steps = replay([_run(1, 7), _run(2, 8)], Triage(llm, store), store)
+    assert [s.memory_kind for s in steps] == ["unknown", "flaky"]
+    assert [s.stateless_kind for s in steps] == ["flaky", "unknown"]
+    assert steps[0].memory_correct is False and steps[1].stateless_correct is False
+    assert steps[0].memory_llm_error == "invalid output: no JSON object in model output"
+    assert steps[0].stateless_llm_error is None
+    assert steps[1].memory_llm_error is None
+    assert steps[1].stateless_llm_error == "invalid output: kind must be one of flaky"
+    assert all(s.memory_error is None for s in steps)
+    assert len(store.records) == 4  # both runs still taught to memory
+
+
+def test_memory_write_failure_aborts_before_the_step_is_reported():
+    import pytest
+
+    from dejafail.memory import MemoryUnavailable
+    from dejafail.replay import ReplayAborted
+
+    class WriteDown(FakeStore):
+        def record_failure(self, run, sig):
+            raise MemoryUnavailable("Hindsight request failed with HTTP 500.")
+
+    store = WriteDown()
+    llm = FakeLLM([_verdict("flaky"), _verdict("flaky")])
+    seen = []
+    with pytest.raises(ReplayAborted) as exc:
+        replay([_run(1, 7)], Triage(llm, store), store, on_step=seen.append)
+    assert exc.value.step_index == 1
+    assert "run-1" in exc.value.reason and "HTTP 500" in exc.value.reason
+    assert seen == []

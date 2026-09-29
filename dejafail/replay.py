@@ -7,10 +7,10 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
-from .memory import MemoryStore
-from .models import CIRun
+from .memory import MemoryStore, MemoryUnavailable
+from .models import CIRun, Verdict
 from .signature import extract_signature
-from .triage import Triage
+from .triage import UNAVAILABLE, Triage
 
 
 @dataclass(frozen=True)
@@ -64,6 +64,20 @@ def seed(runs: Sequence[CIRun], memory: MemoryStore, until: str | None = None) -
     return stored
 
 
+def _abort_reason(remembered: Verdict, stateless: Verdict) -> str | None:
+    if remembered.memory_error:
+        return f"memory arm: Hindsight recall failed: {remembered.memory_error}"
+    for arm, verdict in (("memory arm", remembered), ("stateless arm", stateless)):
+        if verdict.llm_error and verdict.llm_error.startswith(UNAVAILABLE):
+            return f"{arm}: LLM {verdict.llm_error}"
+    return None
+
+
+def _scored_kind(verdict: Verdict) -> str:
+    # Only "invalid output" LLM errors reach scoring (unavailable ones abort): the model failed, so unknown.
+    return "unknown" if verdict.llm_error else verdict.kind
+
+
 def replay(
     runs: Sequence[CIRun],
     triage: Triage,
@@ -72,23 +86,37 @@ def replay(
     pause: float = 0.0,
     sleep: Callable[[float], None] = time.sleep,
 ) -> list[ReplayStep]:
-    """For each run: diagnose with and without memory, score both, then teach memory the outcome."""
+    """For each run: diagnose with and without memory, score both, then teach memory the outcome.
+
+    Raises ReplayAborted when a run cannot be scored honestly: recall failed for the memory arm,
+    either arm's LLM call was unavailable, or the run could not be taught to memory. An arm whose
+    model output stayed invalid is scored as unknown and flagged in the step.
+    """
     memory.reset()
     steps: list[ReplayStep] = []
     for index, run in enumerate(runs, start=1):
         remembered = triage.diagnose(run.log, use_memory=True)
         stateless = triage.diagnose(run.log, use_memory=False)
-        memory.record_failure(run, remembered.sig)
-        memory.record_outcome(run, remembered.sig, run.outcome)
+        reason = _abort_reason(remembered.verdict, stateless.verdict)
+        if reason is not None:
+            raise ReplayAborted(index, reason)
+        try:
+            memory.record_failure(run, remembered.sig)
+            memory.record_outcome(run, remembered.sig, run.outcome)
+        except MemoryUnavailable as exc:
+            raise ReplayAborted(index, f"could not record run {run.run_id} in memory: {exc}") from exc
         step = ReplayStep(
             index=index,
             run_id=run.run_id,
             started_at=run.started_at,
             test_id=remembered.sig.test_id,
             truth=run.truth_label,
-            memory_kind=remembered.verdict.kind,
-            stateless_kind=stateless.verdict.kind,
+            memory_kind=_scored_kind(remembered.verdict),
+            stateless_kind=_scored_kind(stateless.verdict),
             seen_before=remembered.verdict.seen_before_count,
+            memory_error=remembered.verdict.memory_error,
+            memory_llm_error=remembered.verdict.llm_error,
+            stateless_llm_error=stateless.verdict.llm_error,
         )
         steps.append(step)
         if on_step is not None:

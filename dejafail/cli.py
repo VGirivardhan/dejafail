@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -83,8 +84,9 @@ def _read_log(path: Path) -> str:
 
 
 def _run(args: argparse.Namespace) -> int:
+    from .llm import effective_reasoning_effort
     from .memory import MemoryUnavailable
-    from .replay import load_runs, replay, save_steps, seed
+    from .replay import ReplayAborted, load_runs, replay, save_steps, seed
     from .signature import extract_signature
 
     cfg, store, triage = build_services()
@@ -114,17 +116,41 @@ def _run(args: argparse.Namespace) -> int:
     if args.command == "replay":
         runs = load_runs(args.runs)[: args.limit] if args.limit else load_runs(args.runs)
         done = []
+        meta = {
+            "model": cfg.groq_model,
+            "reasoning_effort": effective_reasoning_effort(cfg.groq_model, cfg.groq_reasoning_effort),
+            "pause": args.pause,
+            "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "runs": len(runs),
+            "steps_done": 0,
+            "completed": False,
+            "aborted_reason": None,
+        }
 
         def on_step(step):
             done.append(step)
-            save_steps(done, args.out)
+            meta["steps_done"] = len(done)
+            save_steps(done, args.out, meta)
             print(f"[{step.index:02d}/{len(runs)}] {step.run_id} truth={step.truth:<10} "
-                  f"memory={step.memory_kind:<10} stateless={step.stateless_kind:<10} seen={step.seen_before}")
+                  f"memory={step.memory_kind:<10} stateless={step.stateless_kind:<10} seen={step.seen_before}",
+                  flush=True)
 
-        steps = replay(runs, triage, store, on_step=on_step, pause=args.pause)
+        try:
+            steps = replay(runs, triage, store, on_step=on_step, pause=args.pause)
+        except ReplayAborted as exc:
+            meta.update(steps_done=len(done), completed=False, aborted_reason=exc.reason)
+            save_steps(done, args.out, meta)
+            print(f"replay stopped at run {exc.step_index}: {exc.reason}. "
+                  f"Partial results ({len(done)} runs) saved to {args.out}.", file=sys.stderr, flush=True)
+            return 3
+        meta.update(steps_done=len(steps), completed=True)
+        save_steps(steps, args.out, meta)
         mem = sum(s.memory_correct for s in steps) / max(len(steps), 1)
         base = sum(s.stateless_correct for s in steps) / max(len(steps), 1)
-        print(f"accuracy: memory {mem:.0%} vs stateless {base:.0%} over {len(steps)} runs -> {args.out}")
+        print(f"accuracy: memory {mem:.0%} vs stateless {base:.0%} over {len(steps)} runs -> {args.out}", flush=True)
+        invalid_memory = sum(1 for s in steps if s.memory_llm_error)
+        invalid_stateless = sum(1 for s in steps if s.stateless_llm_error)
+        print(f"invalid-output verdicts: memory {invalid_memory}, stateless {invalid_stateless}", flush=True)
         _refresh(store, MemoryUnavailable)
         return 0
     if args.command == "ask":

@@ -71,3 +71,89 @@ def test_build_services_passes_reasoning_effort_to_groq(monkeypatch):
 def test_replay_pause_defaults_to_twenty_seconds():
     args = cli._parser().parse_args(["replay"])
     assert args.pause == 20.0
+
+
+def _replay_setup(monkeypatch, tmp_path, replies, env_extra=None):
+    import json
+
+    from dejafail import config
+    from dejafail.memory import FakeStore
+    from dejafail.models import CIRun, Outcome
+    from dejafail.triage import Triage
+    from tests.fakes import FakeLLM
+
+    log = "FAILED tests/test_checkout.py::test_checkout_total - AssertionError: assert 0 == 1\n"
+    runs = tmp_path / "runs.jsonl"
+    rows = [CIRun(f"run-{i}", f"2026-09-0{i}T09:00:00+00:00", "main", "x64", "c" * 40, log, "flaky",
+                  Outcome(True, "flaky", "rerun passed")).to_dict() for i in (1, 2)]
+    runs.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+    env = {"HINDSIGHT_API_KEY": "hsk_x", "GROQ_API_KEY": "gsk_y", **(env_extra or {})}
+    cfg = config.load_config(env)
+    store = FakeStore()
+    monkeypatch.setattr(cli, "build_services", lambda: (cfg, store, Triage(FakeLLM(replies), store)))
+    return runs, tmp_path / "results.json"
+
+
+def _verdict_json(kind):
+    return {"kind": kind, "confidence": 0.8, "summary": "s", "next_action": "a", "evidence_ids": []}
+
+
+def test_replay_success_writes_meta_and_reports_invalid_outputs(monkeypatch, tmp_path, capsys):
+    from datetime import datetime
+
+    from dejafail.llm import LLMOutputError
+    from dejafail.replay import load_meta, load_steps
+
+    replies = [LLMOutputError("no JSON object in model output"), _verdict_json("flaky"),
+               _verdict_json("flaky"), _verdict_json("regression")]
+    runs, out = _replay_setup(monkeypatch, tmp_path, replies)
+    code = cli.main(["replay", "--runs", str(runs), "--out", str(out), "--pause", "0"])
+    printed = capsys.readouterr().out
+    assert code == 0
+    assert "accuracy: memory 50% vs stateless 50% over 2 runs" in printed
+    assert "invalid-output verdicts: memory 1, stateless 0" in printed
+    meta = load_meta(out)
+    assert meta["model"] == "openai/gpt-oss-120b"
+    assert meta["reasoning_effort"] == "low"
+    assert meta["pause"] == 0.0
+    assert meta["runs"] == 2
+    assert meta["completed"] is True
+    assert meta["aborted_reason"] is None
+    assert datetime.fromisoformat(meta["generated_at"]).utcoffset().total_seconds() == 0
+    steps = load_steps(out)
+    assert len(steps) == 2 and steps[0].memory_llm_error.startswith("invalid output: ")
+
+
+def test_replay_abort_keeps_partial_results_and_exits_3(monkeypatch, tmp_path, capsys):
+    import json
+
+    from dejafail.llm import LLMUnavailable
+    from dejafail.replay import load_meta, load_steps
+
+    replies = [_verdict_json("flaky"), _verdict_json("flaky"),
+               LLMUnavailable("Groq request failed: 429 rate limit"), _verdict_json("flaky")]
+    runs, out = _replay_setup(monkeypatch, tmp_path, replies)
+    code = cli.main(["replay", "--runs", str(runs), "--out", str(out), "--pause", "0"])
+    captured = capsys.readouterr()
+    assert code == 3
+    assert "replay stopped at run 2: " in captured.err
+    assert "429 rate limit" in captured.err
+    assert f"Partial results (1 runs) saved to {out}." in captured.err
+    assert "accuracy:" not in captured.out
+    assert [s.run_id for s in load_steps(out)] == ["run-1"]
+    meta = load_meta(out)
+    assert meta["completed"] is False
+    assert "429 rate limit" in meta["aborted_reason"]
+    assert json.loads(out.read_text(encoding="utf-8"))["meta"]["runs"] == 2
+
+
+def test_replay_meta_reasoning_effort_is_null_for_models_that_do_not_take_it(monkeypatch, tmp_path, capsys):
+    from dejafail.replay import load_meta
+
+    replies = [_verdict_json("flaky")] * 4
+    runs, out = _replay_setup(monkeypatch, tmp_path, replies, {"GROQ_MODEL": "qwen/qwen3-32b"})
+    assert cli.main(["replay", "--runs", str(runs), "--out", str(out), "--pause", "0"]) == 0
+    capsys.readouterr()
+    meta = load_meta(out)
+    assert meta["model"] == "qwen/qwen3-32b"
+    assert meta["reasoning_effort"] is None

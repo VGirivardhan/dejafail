@@ -10,6 +10,8 @@ from .models import VERDICT_KINDS, Diagnosis, Evidence, FailureSignature, Memory
 from .signature import extract_signature
 
 ERROR_TEXT_LIMIT = 300  # characters of an LLM error kept in a verdict's summary and llm_error
+UNAVAILABLE = "unavailable: "  # Verdict.llm_error prefix: Groq could not answer (network, rate limit, 4xx/5xx)
+INVALID_OUTPUT = "invalid output: "  # Verdict.llm_error prefix: the model never produced a valid verdict
 
 SYSTEM_PROMPT = """You are DejaFail, a CI failure triage assistant for the repository "{repo}".
 Classify the failing CI run into exactly one kind:
@@ -125,11 +127,11 @@ class Triage:
             obj = self.llm.complete_json(self.system, prompt, validate=validate_verdict_json)
             verdict = verdict_from_json(obj, aliases)
         except LLMUnavailable as exc:
-            verdict = failed_verdict(exc, "unavailable: ")
+            verdict = failed_verdict(exc, UNAVAILABLE)
         except LLMOutputError as exc:
-            verdict = failed_verdict(exc, "invalid output: ")
+            verdict = failed_verdict(exc, INVALID_OUTPUT)
         except LLMError as exc:
-            verdict = failed_verdict(exc, "unavailable: ")
+            verdict = failed_verdict(exc, UNAVAILABLE)
         verdict.used_memory = with_memory
         verdict.memory_error = memory_error
         verdict.seen_before_count = count_seen(memories)
