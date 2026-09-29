@@ -60,11 +60,22 @@ def verdict_card(title: str, diagnosis: Diagnosis) -> None:
     if v.memory_error:
         st.warning(f"Memory unavailable: {v.memory_error}")
     elif v.used_memory:
-        st.caption(f"Seen before in {v.seen_before_count} earlier run(s). Evidence recalled from Hindsight:")
-        for e in v.evidence:
-            st.markdown(f"- `{e.date or 'undated'}` {e.text}")
-        if not v.evidence:
-            st.caption("No matching memories.")
+        if v.evidence:
+            st.caption(
+                f"Seen before in {v.seen_before_count} earlier run(s). Evidence the model cited from Hindsight:"
+            )
+            for e in v.evidence:
+                st.markdown(f"- `{e.date or 'undated'}` {e.text}")
+        elif diagnosis.memories:
+            st.caption(
+                f"Seen before in {v.seen_before_count} earlier run(s). "
+                "Recalled from Hindsight (not cited by the model):"
+            )
+            recalled = sorted(diagnosis.memories, key=lambda m: not m.exact)[:5]  # stable: exact matches first
+            for m in recalled:
+                st.markdown(f"- `{m.date or 'undated'}` {m.text}")
+        else:
+            st.caption("Not seen before: Hindsight has no matching memories.")
 
 
 st.title("DejaFail")
@@ -120,30 +131,37 @@ with tab_curve:
     if not results_path.exists():
         st.info("No replay yet. Run `python -m dejafail replay` to generate the learning curve.")
     else:
-        steps = load_steps(results_path)
-        total = max(len(steps), 1)
-        c1, c2, c3 = st.columns(3)
-        c1.metric("CI runs replayed", len(steps))
-        c2.metric("Correct with memory", f"{sum(s.memory_correct for s in steps) / total:.0%}")
-        c3.metric("Correct stateless", f"{sum(s.stateless_correct for s in steps) / total:.0%}")
-        frame = pd.DataFrame(rolling_accuracy(steps)).set_index("run")
-        frame = frame.rename(columns={"memory": "With Hindsight memory", "stateless": "Stateless LLM"})
-        st.line_chart(frame, x_label="CI run (chronological)", y_label="Accuracy, last 8 runs")
-        flaky = [s for s in steps if s.truth == "flaky"]
-        if flaky:
-            st.caption(
-                f"Flaky-test failures: memory got {sum(s.memory_correct for s in flaky)}/{len(flaky)}, "
-                f"stateless got {sum(s.stateless_correct for s in flaky)}/{len(flaky)}. "
-                "Synthetic history of a fictional repository; see README."
+        try:
+            steps = load_steps(results_path)
+        except (ValueError, TypeError, KeyError):
+            steps = None
+            st.warning("Replay results file is incomplete or malformed; rerun the replay.")
+        if steps is not None and not steps:
+            st.info("Replay has no steps yet.")
+        elif steps:
+            total = max(len(steps), 1)
+            c1, c2, c3 = st.columns(3)
+            c1.metric("CI runs replayed", len(steps))
+            c2.metric("Correct with memory", f"{sum(s.memory_correct for s in steps) / total:.0%}")
+            c3.metric("Correct stateless", f"{sum(s.stateless_correct for s in steps) / total:.0%}")
+            frame = pd.DataFrame(rolling_accuracy(steps)).set_index("run")
+            frame = frame.rename(columns={"memory": "With Hindsight memory", "stateless": "Stateless LLM"})
+            st.line_chart(frame, x_label="CI run (chronological)", y_label="Accuracy, last 8 runs")
+            flaky = [s for s in steps if s.truth == "flaky"]
+            if flaky:
+                st.caption(
+                    f"Flaky-test failures: memory got {sum(s.memory_correct for s in flaky)}/{len(flaky)}, "
+                    f"stateless got {sum(s.stateless_correct for s in flaky)}/{len(flaky)}. "
+                    "Synthetic history of a fictional repository; see README."
+                )
+            st.dataframe(
+                pd.DataFrame([
+                    {"run": s.run_id, "date": s.started_at[:10], "test": s.test_id or "(job)", "truth": s.truth,
+                     "memory": s.memory_kind, "stateless": s.stateless_kind, "seen before": s.seen_before}
+                    for s in steps
+                ]),
+                hide_index=True,
             )
-        st.dataframe(
-            pd.DataFrame([
-                {"run": s.run_id, "date": s.started_at[:10], "test": s.test_id or "(job)", "truth": s.truth,
-                 "memory": s.memory_kind, "stateless": s.stateless_kind, "seen before": s.seen_before}
-                for s in steps
-            ]),
-            hide_index=True,
-        )
 
 with tab_learned:
     st.subheader("Flaky ledger")
