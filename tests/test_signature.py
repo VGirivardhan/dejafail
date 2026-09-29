@@ -134,3 +134,33 @@ def test_normalize_strips_volatile_tokens():
     out = normalize(text)
     assert "0x7f" not in out and "/home/runner" not in out and ":42" not in out
     assert "41.22s" not in out and "3f2a9c1d" not in out
+
+
+def test_normalize_before_truncate_for_long_messages():
+    # Finding 1: volatile tokens before the 500-char cutoff have different lengths
+    # when raw (/home/runner-a/ vs /home/runner-long-name-b/) but normalize to same length
+    # This tests that normalize-then-truncate produces consistent hashes
+    msg_a = "AssertionError: " + "x" * 480 + " in /home/runner-a/work/db.py:123 at 0x1234567890ab noise1"
+    msg_b = "AssertionError: " + "x" * 480 + " in /home/runner-long-name-b/work/db.py:456 at 0xabcdef0123456 noise2"
+
+    log_a = f"FAILED tests/x.py::test_y - {msg_a}\n"
+    log_b = f"FAILED tests/x.py::test_y - {msg_b}\n"
+
+    sig_a = extract_signature(log_a)
+    sig_b = extract_signature(log_b)
+    # Both messages > 500 chars; after normalize-then-truncate, the volatile tokens
+    # (/home/runner-a/ and /home/runner-long-name-b/) both become <path>/ (7 chars)
+    # so the truncation point is consistent
+    assert sig_a.sig_hash == sig_b.sig_hash
+    assert sig_a.test_id == sig_b.test_id == "tests/x.py::test_y"
+
+
+def test_volatile_tokens_in_error_message_are_normalized():
+    # Finding 2: the error message itself may contain volatile tokens that need normalizing
+    msg_a = "FAILED tests/x.py::test_y - AssertionError: conn <sqlite3.Connection object at 0x7f3a2c1e4b40> took 41.22s in /home/runner/work/app/db.py:47"
+    msg_b = "FAILED tests/x.py::test_y - AssertionError: conn <sqlite3.Connection object at 0x7f99aa01c2d0> took 39.50s in /home/runner/work/app/db.py:123"
+
+    sig_a = extract_signature(msg_a)
+    sig_b = extract_signature(msg_b)
+    assert sig_a.sig_hash == sig_b.sig_hash
+    assert sig_a.test_id == sig_b.test_id == "tests/x.py::test_y"

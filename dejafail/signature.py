@@ -97,8 +97,8 @@ def _excerpt(log: str) -> str:
 def extract_signature(log: str) -> FailureSignature:
     text = clean_log(log)
     test_id, error_type, message = _find_failure(text)
+    normalized = normalize(message)[:MAX_MESSAGE_CHARS]
     message = message[:MAX_MESSAGE_CHARS]
-    normalized = normalize(message)
     sig_hash = hashlib.sha1(f"{error_type}|{normalized}".encode("utf-8")).hexdigest()[:12]
     return FailureSignature(
         test_id=test_id,
