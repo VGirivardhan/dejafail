@@ -5,7 +5,7 @@ import json
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Any, Callable, Sequence
 
 from .memory import MemoryStore
 from .models import CIRun
@@ -23,6 +23,9 @@ class ReplayStep:
     memory_kind: str
     stateless_kind: str
     seen_before: int
+    memory_error: str | None = None  # recall failed for the memory arm
+    memory_llm_error: str | None = None  # "invalid output: ..." when the memory arm is scored as unknown
+    stateless_llm_error: str | None = None  # same for the stateless arm
 
     @property
     def memory_correct(self) -> bool:
@@ -31,6 +34,15 @@ class ReplayStep:
     @property
     def stateless_correct(self) -> bool:
         return self.stateless_kind == self.truth
+
+
+class ReplayAborted(RuntimeError):
+    """The replay stopped because a run could not be scored honestly (recall or LLM unavailable)."""
+
+    def __init__(self, step_index: int, reason: str):
+        super().__init__(f"replay stopped at run {step_index}: {reason}")
+        self.step_index = step_index
+        self.reason = reason
 
 
 def load_runs(path: str | Path) -> list[CIRun]:
@@ -98,9 +110,21 @@ def rolling_accuracy(steps: Sequence[ReplayStep], window: int = 8) -> list[dict[
     return rows
 
 
-def save_steps(steps: Sequence[ReplayStep], path: str | Path) -> None:
-    Path(path).write_text(json.dumps([asdict(s) for s in steps], indent=2), encoding="utf-8")
+def save_steps(steps: Sequence[ReplayStep], path: str | Path, meta: dict[str, Any] | None = None) -> None:
+    payload = {"meta": meta or {}, "steps": [asdict(s) for s in steps]}
+    Path(path).write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def _load_results(path: str | Path) -> dict[str, Any]:
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    if isinstance(data, list):  # legacy results file: a bare list of steps
+        return {"meta": {}, "steps": data}
+    return data
 
 
 def load_steps(path: str | Path) -> list[ReplayStep]:
-    return [ReplayStep(**item) for item in json.loads(Path(path).read_text(encoding="utf-8"))]
+    return [ReplayStep(**item) for item in _load_results(path).get("steps", [])]
+
+
+def load_meta(path: str | Path) -> dict[str, Any]:
+    return dict(_load_results(path).get("meta") or {})

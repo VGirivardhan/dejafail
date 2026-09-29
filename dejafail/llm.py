@@ -47,13 +47,38 @@ def parse_json_object(text: str) -> dict[str, Any]:
     return obj
 
 
+def effective_reasoning_effort(model: str, reasoning_effort: str | None) -> str | None:
+    """The reasoning_effort actually sent to Groq: only gpt-oss models accept it, and only when set."""
+    if model.startswith("openai/gpt-oss") and reasoning_effort:
+        return reasoning_effort
+    return None
+
+
 class GroqLLM:
-    def __init__(self, api_key: str, model: str = "openai/gpt-oss-120b", client: Any = None, retries: int = 2):
+    def __init__(
+        self,
+        api_key: str,
+        model: str = "openai/gpt-oss-120b",
+        client: Any = None,
+        retries: int = 2,
+        reasoning_effort: str = "low",
+        max_completion_tokens: int = 1024,
+    ):
         self.model = model
         self.retries = retries
+        self.reasoning_effort = reasoning_effort
+        self.max_completion_tokens = max_completion_tokens
         self._client = client or openai.OpenAI(
             api_key=api_key, base_url=GROQ_BASE_URL, max_retries=4, timeout=60.0
         )
+
+    def _request_options(self) -> dict[str, Any]:
+        # Groq's free tier counts reasoning tokens against 8K tokens/minute and 200K tokens/day per model.
+        options: dict[str, Any] = {"max_completion_tokens": self.max_completion_tokens}
+        effort = effective_reasoning_effort(self.model, self.reasoning_effort)
+        if effort is not None:
+            options["reasoning_effort"] = effort
+        return options
 
     def complete_json(self, system: str, user: str, validate: Validator | None = None) -> dict[str, Any]:
         messages: list[dict[str, str]] = [
@@ -68,6 +93,7 @@ class GroqLLM:
                     messages=messages,
                     response_format={"type": "json_object"},
                     temperature=0.2,
+                    **self._request_options(),
                 )
             except openai.APIStatusError as exc:
                 if getattr(exc, "status_code", None) == 400:

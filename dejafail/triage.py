@@ -4,10 +4,12 @@ from __future__ import annotations
 import math
 from typing import Any, Sequence
 
-from .llm import LLM, LLMError
+from .llm import LLM, LLMError, LLMOutputError, LLMUnavailable
 from .memory import MemoryStore, MemoryUnavailable
 from .models import VERDICT_KINDS, Diagnosis, Evidence, FailureSignature, Memory, Verdict
 from .signature import extract_signature
+
+ERROR_TEXT_LIMIT = 300  # characters of an LLM error kept in a verdict's summary and llm_error
 
 SYSTEM_PROMPT = """You are DejaFail, a CI failure triage assistant for the repository "{repo}".
 Classify the failing CI run into exactly one kind:
@@ -77,6 +79,22 @@ def verdict_from_json(obj: dict[str, Any], aliases: dict[str, Memory]) -> Verdic
     )
 
 
+def clip(text: str, limit: int = ERROR_TEXT_LIMIT) -> str:
+    return text if len(text) <= limit else text[: limit - 3] + "..."
+
+
+def failed_verdict(exc: Exception, prefix: str) -> Verdict:
+    """An unknown verdict that says why the LLM gave none; prefix is "unavailable: " or "invalid output: "."""
+    text = clip(str(exc))
+    return Verdict(
+        kind="unknown",
+        confidence=0.0,
+        summary=f"Could not get a verdict: {text}",
+        next_action="Retry, or read the log excerpt manually.",
+        llm_error=f"{prefix}{text}",
+    )
+
+
 def count_seen(memories: Sequence[Memory]) -> int:
     """Distinct earlier runs that share this failure's signature or test."""
     return len({m.run_id or m.id for m in memories if m.exact})
@@ -106,13 +124,12 @@ class Triage:
         try:
             obj = self.llm.complete_json(self.system, prompt, validate=validate_verdict_json)
             verdict = verdict_from_json(obj, aliases)
+        except LLMUnavailable as exc:
+            verdict = failed_verdict(exc, "unavailable: ")
+        except LLMOutputError as exc:
+            verdict = failed_verdict(exc, "invalid output: ")
         except LLMError as exc:
-            verdict = Verdict(
-                kind="unknown",
-                confidence=0.0,
-                summary=f"Could not get a verdict: {exc}",
-                next_action="Retry, or read the log excerpt manually.",
-            )
+            verdict = failed_verdict(exc, "unavailable: ")
         verdict.used_memory = with_memory
         verdict.memory_error = memory_error
         verdict.seen_before_count = count_seen(memories)

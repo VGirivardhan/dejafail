@@ -46,6 +46,7 @@ class Verdict:
     seen_before_count: int = 0
     used_memory: bool = False
     memory_error: str | None = None
+    llm_error: str | None = None  # "unavailable: ..." or "invalid output: ..." when the LLM call failed
 
 
 @dataclass(frozen=True)

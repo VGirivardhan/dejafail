@@ -27,3 +27,14 @@ def test_repr_hides_keys():
     cfg = load_config({"HINDSIGHT_API_KEY": "hsk_x", "GROQ_API_KEY": "gsk_y"})
     assert "hsk_x" not in repr(cfg)
     assert "gsk_y" not in repr(cfg)
+
+
+def test_reasoning_effort_defaults_to_low():
+    cfg = load_config({"HINDSIGHT_API_KEY": "hsk_x", "GROQ_API_KEY": "gsk_y"})
+    assert cfg.groq_reasoning_effort == "low"
+
+
+def test_reasoning_effort_is_read_from_env_and_shown_in_repr():
+    cfg = load_config({"HINDSIGHT_API_KEY": "hsk_x", "GROQ_API_KEY": "gsk_y", "GROQ_REASONING_EFFORT": " medium "})
+    assert cfg.groq_reasoning_effort == "medium"
+    assert "medium" in repr(cfg)

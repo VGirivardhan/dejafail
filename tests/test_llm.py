@@ -63,3 +63,40 @@ def test_connection_error_becomes_llm_unavailable():
     llm = GroqLLM(api_key="unused", client=client)
     with pytest.raises(LLMUnavailable):
         llm.complete_json("sys", "user")
+
+
+def test_gpt_oss_request_sends_reasoning_effort_and_completion_cap():
+    client = fake_openai_client(['{"kind": "flaky"}'])
+    llm = GroqLLM(api_key="unused", model="openai/gpt-oss-120b", client=client, reasoning_effort="low")
+    llm.complete_json("sys", "user")
+    request = client.chat.completions.requests[0]
+    assert request["reasoning_effort"] == "low"
+    assert request["max_completion_tokens"] == 1024
+
+
+def test_default_llm_asks_for_low_reasoning_effort():
+    client = fake_openai_client(['{"kind": "flaky"}'])
+    GroqLLM(api_key="unused", client=client).complete_json("sys", "user")
+    assert client.chat.completions.requests[0]["reasoning_effort"] == "low"
+
+
+def test_other_models_omit_reasoning_effort_but_keep_completion_cap():
+    client = fake_openai_client(['{"kind": "flaky"}'])
+    llm = GroqLLM(api_key="unused", model="qwen/qwen3-32b", client=client, reasoning_effort="low")
+    llm.complete_json("sys", "user")
+    request = client.chat.completions.requests[0]
+    assert "reasoning_effort" not in request
+    assert request["max_completion_tokens"] == 1024
+
+
+def test_empty_reasoning_effort_is_not_sent():
+    client = fake_openai_client(['{"kind": "flaky"}'])
+    llm = GroqLLM(api_key="unused", model="openai/gpt-oss-20b", client=client, reasoning_effort="")
+    llm.complete_json("sys", "user")
+    assert "reasoning_effort" not in client.chat.completions.requests[0]
+
+
+def test_completion_cap_is_configurable():
+    client = fake_openai_client(['{"kind": "flaky"}'])
+    GroqLLM(api_key="unused", client=client, max_completion_tokens=512).complete_json("sys", "user")
+    assert client.chat.completions.requests[0]["max_completion_tokens"] == 512

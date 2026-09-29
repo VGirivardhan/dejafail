@@ -105,3 +105,45 @@ def test_next_action_null_yields_default_text():
     llm = FakeLLM([dict(GOOD, next_action=None, evidence_ids=[])])
     d = Triage(llm, FakeStore()).diagnose(LOG, use_memory=False)
     assert d.verdict.next_action == "Inspect the log excerpt."
+
+
+def test_unavailable_llm_sets_unavailable_llm_error():
+    from dejafail.llm import LLMUnavailable
+
+    llm = FakeLLM([LLMUnavailable("Groq unreachable: timed out")])
+    d = Triage(llm, FakeStore()).diagnose(LOG)
+    assert d.verdict.kind == "unknown"
+    assert d.verdict.llm_error == "unavailable: Groq unreachable: timed out"
+    assert d.verdict.summary == "Could not get a verdict: Groq unreachable: timed out"
+
+
+def test_invalid_output_sets_invalid_output_llm_error():
+    llm = FakeLLM([LLMOutputError("no JSON object in model output")])
+    d = Triage(llm, FakeStore()).diagnose(LOG)
+    assert d.verdict.kind == "unknown"
+    assert d.verdict.llm_error == "invalid output: no JSON object in model output"
+
+
+def test_other_llm_errors_count_as_unavailable():
+    from dejafail.llm import LLMError
+
+    llm = FakeLLM([LLMError("something odd")])
+    d = Triage(llm, FakeStore()).diagnose(LOG, use_memory=False)
+    assert d.verdict.llm_error == "unavailable: something odd"
+
+
+def test_llm_error_and_summary_text_are_truncated_to_300_chars():
+    from dejafail.llm import LLMUnavailable
+
+    llm = FakeLLM([LLMUnavailable("x" * 1000)])
+    d = Triage(llm, FakeStore()).diagnose(LOG)
+    assert d.verdict.llm_error.startswith("unavailable: x")
+    assert len(d.verdict.llm_error) == len("unavailable: ") + 300
+    assert d.verdict.summary.startswith("Could not get a verdict: x")
+    assert len(d.verdict.summary) == len("Could not get a verdict: ") + 300
+
+
+def test_successful_verdict_has_no_llm_error():
+    llm = FakeLLM([dict(GOOD, evidence_ids=[])])
+    d = Triage(llm, FakeStore()).diagnose(LOG, use_memory=False)
+    assert d.verdict.llm_error is None

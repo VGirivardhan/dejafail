@@ -33,3 +33,13 @@ def test_adhoc_run_id_is_stable_for_same_log():
     assert a.run_id == b.run_id
     assert a.run_id.startswith("manual-")
     assert a.started_at == "2026-09-29T10:00:00+00:00"
+
+
+def test_verdict_llm_error_defaults_to_none_and_is_the_last_field():
+    from dataclasses import fields
+
+    from dejafail.models import Verdict
+
+    verdict = Verdict("flaky", 0.9, "s", "a")
+    assert verdict.llm_error is None
+    assert [f.name for f in fields(Verdict)][-1] == "llm_error"

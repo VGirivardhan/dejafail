@@ -55,3 +55,54 @@ def test_steps_round_trip(tmp_path):
     steps = [ReplayStep(1, "r1", "2026-09-07T09:00:00+00:00", "t", "flaky", "flaky", "regression", 0)]
     save_steps(steps, tmp_path / "out.json")
     assert load_steps(tmp_path / "out.json") == steps
+
+
+def test_eight_positional_fields_still_build_a_step_with_no_errors():
+    step = ReplayStep(1, "r1", "2026-09-07", None, "flaky", "flaky", "infra", 0)
+    assert (step.memory_error, step.memory_llm_error, step.stateless_llm_error) == (None, None, None)
+
+
+def test_steps_round_trip_with_meta(tmp_path):
+    from dejafail.replay import load_meta
+
+    path = tmp_path / "out.json"
+    steps = [ReplayStep(1, "r1", "2026-09-07T09:00:00+00:00", "t", "flaky", "flaky", "unknown", 0,
+                        stateless_llm_error="invalid output: no JSON object in model output")]
+    meta = {"model": "openai/gpt-oss-120b", "reasoning_effort": "low", "completed": True}
+    save_steps(steps, path, meta)
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    assert raw["meta"] == meta
+    assert len(raw["steps"]) == 1
+    assert load_steps(path) == steps
+    assert load_meta(path) == meta
+
+
+def test_save_without_meta_writes_an_empty_meta_object(tmp_path):
+    from dejafail.replay import load_meta
+
+    path = tmp_path / "out.json"
+    save_steps([], path)
+    assert json.loads(path.read_text(encoding="utf-8")) == {"meta": {}, "steps": []}
+    assert load_meta(path) == {}
+    assert load_steps(path) == []
+
+
+def test_legacy_bare_list_results_file_still_loads(tmp_path):
+    from dejafail.replay import load_meta
+
+    path = tmp_path / "legacy.json"
+    legacy = [{"index": 1, "run_id": "r1", "started_at": "2026-09-07T09:00:00+00:00", "test_id": "t",
+               "truth": "flaky", "memory_kind": "flaky", "stateless_kind": "regression", "seen_before": 0}]
+    path.write_text(json.dumps(legacy), encoding="utf-8")
+    assert load_steps(path) == [ReplayStep(1, "r1", "2026-09-07T09:00:00+00:00", "t", "flaky", "flaky", "regression", 0)]
+    assert load_meta(path) == {}
+
+
+def test_replay_aborted_carries_step_index_and_reason():
+    from dejafail.replay import ReplayAborted
+
+    exc = ReplayAborted(2, "memory arm: unavailable: Groq unreachable")
+    assert isinstance(exc, RuntimeError)
+    assert exc.step_index == 2
+    assert exc.reason == "memory arm: unavailable: Groq unreachable"
+    assert "Groq unreachable" in str(exc)

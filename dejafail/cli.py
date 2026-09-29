@@ -44,7 +44,8 @@ def build_services() -> tuple[Any, Any, Any]:
 
     cfg = load_config()
     store = HindsightStore.from_config(cfg)
-    return cfg, store, Triage(GroqLLM(cfg.groq_api_key, cfg.groq_model), store, cfg.repo)
+    llm = GroqLLM(cfg.groq_api_key, cfg.groq_model, reasoning_effort=cfg.groq_reasoning_effort)
+    return cfg, store, Triage(llm, store, cfg.repo)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -70,7 +71,7 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--runs", type=Path, default=DEFAULT_RUNS)
     p.add_argument("--out", type=Path, default=DEFAULT_RESULTS)
     p.add_argument("--limit", type=int)
-    p.add_argument("--pause", type=float, default=0.0, help="seconds between runs (Groq free tier)")
+    p.add_argument("--pause", type=float, default=20.0, help="seconds between runs (Groq free tier: 8K tokens/minute)")
 
     p = sub.add_parser("ask", help="Ask the memory bank a question (Hindsight reflect)")
     p.add_argument("question")

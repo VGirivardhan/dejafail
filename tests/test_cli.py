@@ -47,3 +47,27 @@ def test_non_ascii_output_does_not_crash_on_cp1252(monkeypatch):
     print("● CartTotals ━━ done")
     stream.flush()
     assert raw.getvalue()
+
+
+def test_build_services_passes_reasoning_effort_to_groq(monkeypatch):
+    from dejafail import config, llm, memory
+
+    cfg = config.load_config({"HINDSIGHT_API_KEY": "hsk_x", "GROQ_API_KEY": "gsk_y", "GROQ_REASONING_EFFORT": "medium"})
+    monkeypatch.setattr(config, "load_config", lambda: cfg)
+    monkeypatch.setattr(memory.HindsightStore, "from_config", classmethod(lambda cls, c: "store"))
+    seen = {}
+
+    class RecordingLLM:
+        def __init__(self, *args, **kwargs):
+            seen["args"], seen["kwargs"] = args, kwargs
+
+    monkeypatch.setattr(llm, "GroqLLM", RecordingLLM)
+    got_cfg, store, triage = cli.build_services()
+    assert got_cfg is cfg and store == "store"
+    assert seen["args"][:2] == ("gsk_y", "openai/gpt-oss-120b")
+    assert seen["kwargs"]["reasoning_effort"] == "medium"
+
+
+def test_replay_pause_defaults_to_twenty_seconds():
+    args = cli._parser().parse_args(["replay"])
+    assert args.pause == 20.0
