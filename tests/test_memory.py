@@ -125,3 +125,58 @@ def test_fake_store_history_matches_by_signature_tags():
     assert len(memories) == 2 and all(m.exact for m in memories)
     store.reset()
     assert store.history(SIG) == [] and store.resets == 1
+
+
+def test_history_with_no_status_raises_memory_unavailable_unreachable():
+    """Test that a plain exception (no .status) produces 'unreachable' message."""
+    class FakeClientNoStatus(FakeHindsightClient):
+        def recall(self, **kwargs):
+            raise ConnectionError("Connection refused")
+
+    client = FakeClientNoStatus()
+    with pytest.raises(MemoryUnavailable) as exc:
+        HindsightStore(client, "b", "shopfront").history(SIG)
+    assert "unreachable" in str(exc.value)
+
+
+def test_error_message_does_not_leak_secret_in_exception():
+    """Test that error messages don't leak secret strings from exceptions."""
+    class FakeClientWithSecret(FakeHindsightClient):
+        def retain(self, **kwargs):
+            exc = Exception("hsk_leaky_secret_123 in request")
+            exc.status = 401
+            raise exc
+
+    client = FakeClientWithSecret()
+    with pytest.raises(MemoryUnavailable) as exc:
+        HindsightStore(client, "b", "shopfront").record_failure(RUN, SIG)
+    error_msg = str(exc.value)
+    assert "hsk_leaky_secret_123" not in error_msg
+    assert "HINDSIGHT_API_KEY" in error_msg
+
+
+def test_ensure_bank_retries_after_directive_partial_failure():
+    """Test that ensure_bank retries both directive and mental model after partial failure."""
+    call_count = {"create_directive": 0}
+
+    class FakeClientPartialFailure(FakeHindsightClient):
+        def create_directive(self, **kwargs):
+            call_count["create_directive"] += 1
+            self.calls.append(("create_directive", kwargs))
+            if call_count["create_directive"] == 1:
+                raise FakeApiError(503)
+
+    client = FakeClientPartialFailure(mental_model_exists=False)
+    store = HindsightStore(client, "b", "shopfront")
+
+    # First call: create_directive fails with 503
+    with pytest.raises(MemoryUnavailable):
+        store.ensure_bank()
+
+    # Second call: both create_directive and create_mental_model should be attempted
+    store.ensure_bank()
+
+    # Verify create_directive was called twice and create_mental_model once
+    assert call_count["create_directive"] == 2
+    assert client.names().count("create_directive") == 2
+    assert client.names().count("create_mental_model") == 1

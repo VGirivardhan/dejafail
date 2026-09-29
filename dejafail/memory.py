@@ -131,17 +131,17 @@ class HindsightStore:
             if _status(exc) != 404:
                 raise MemoryUnavailable(_describe(exc)) from exc
         self._call(
+            self._client.create_directive,
+            bank_id=self.bank_id,
+            name="No flaky verdict after a code fix",
+            content=DIRECTIVE,
+        )
+        self._call(
             self._client.create_mental_model,
             bank_id=self.bank_id,
             name="Flaky ledger",
             source_query=MENTAL_MODEL_QUERY,
             id=MENTAL_MODEL_ID,
-        )
-        self._call(
-            self._client.create_directive,
-            bank_id=self.bank_id,
-            name="No flaky verdict after a code fix",
-            content=DIRECTIVE,
         )
 
     def reset(self) -> None:
