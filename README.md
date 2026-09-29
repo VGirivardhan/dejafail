@@ -23,18 +23,21 @@ The UI runs the same log through a stateless LLM and through DejaFail side by si
 | `recall` (tag-filtered) | `HindsightStore.history` | Exact history of this signature or test (`tags_match="any_strict"`) |
 | `recall` (semantic) | `HindsightStore.history` | Similar errors in other tests, e.g. the same disk-full failure on a different job |
 | Mental model | `MENTAL_MODEL_ID = "flaky-ledger"` | A consolidated "flaky ledger" shown in the *What it learned* tab |
-| Directive | `DIRECTIVE` | Hard rule: never call a failure flaky if a code change fixed the same signature before |
+| Directive | `DIRECTIVE` | Rule "never call a failure flaky if a code change fixed the same signature before". Hindsight applies it to `reflect` answers ("Ask the ledger") and to the Flaky ledger mental model; the triage prompt carries the same rule for the verdicts |
 | `reflect` | `HindsightStore.ask` | "Ask the ledger": e.g. *Which tests should we quarantine?* |
 
 ## Quickstart
 
 ```bash
-py -3.11 -m venv .venv && .venv/Scripts/activate      # macOS/Linux: python3 -m venv .venv && source .venv/bin/activate
+py -3.11 -m venv .venv && source .venv/Scripts/activate  # Git Bash; PowerShell: .venv\Scripts\Activate.ps1
+                                                         # macOS/Linux: python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 cp .env.example .env                                     # add HINDSIGHT_API_KEY and GROQ_API_KEY
-python -m dejafail replay --pause 2                      # replays 48 CI runs into memory, writes the learning curve
+python -m dejafail replay --pause 20                     # replays 48 CI runs into memory, writes the learning curve
 streamlit run app/streamlit_app.py
 ```
+
+A full replay makes 96 LLM calls (each run is diagnosed with and without memory), takes about 20-25 minutes on the Groq free tier and uses most of one model's daily token budget. If you hit the daily cap, set `GROQ_MODEL=openai/gpt-oss-20b` in `.env` as a fallback. If Groq or Hindsight becomes unavailable mid-replay, the replay stops and keeps the runs scored so far.
 
 Keys: Hindsight Cloud at https://ui.hindsight.vectorize.io, Groq at https://console.groq.com.
 
@@ -62,6 +65,8 @@ CI log -> signature.py -> triage.py -> llm.py (Groq, JSON mode, validated + retr
 ## Data
 
 `data/shopfront/runs.jsonl` is a synthetic three-week CI history of a fictional checkout service (48 failing runs), generated deterministically by `scripts/build_dataset.py`. It plants realistic recurring patterns: a pair of flaky tests sharing a temp database, a pydantic 2 upgrade break that returns eleven days later, an arm64 runner that keeps running out of disk, a real rounding regression, and one-off failures. Each run carries the ground-truth label used to score the learning curve. Accuracy numbers shown in the UI come from this synthetic replay.
+
+During the replay, each run's developer-confirmed outcome is stored in memory only after that run has been scored, so memory never sees the answer to the run it is judging. The learning curve is a single replay at temperature 0.2, not an average over repeated runs, and the results file records the model it was produced with.
 
 ## Tests
 

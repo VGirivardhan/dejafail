@@ -1,3 +1,5 @@
+import asyncio
+import threading
 from datetime import datetime
 
 import pytest
@@ -7,11 +9,13 @@ from dejafail.memory import (
     FakeStore,
     HindsightStore,
     MemoryUnavailable,
+    ThreadConfinedStore,
     failure_text,
     outcome_text,
 )
 from dejafail.models import CIRun, FailureSignature, Outcome
-from tests.fakes import FakeApiError, FakeHindsightClient, recall_result
+from dejafail.triage import Triage
+from tests.fakes import FakeApiError, FakeHindsightClient, FakeLLM, recall_result
 
 SIG = FailureSignature(
     test_id="tests/test_checkout.py::test_checkout_total",
@@ -181,3 +185,121 @@ def test_ensure_bank_retries_after_directive_partial_failure():
     assert call_count["create_directive"] == 2
     assert client.names().count("create_directive") == 2
     assert client.names().count("create_mental_model") == 1
+
+
+def test_status_less_error_keeps_its_cause_and_redacts_keys():
+    class FakeClientBrokenLoop(FakeHindsightClient):
+        def recall(self, **kwargs):
+            raise RuntimeError("Timeout context manager should be used inside a task")
+
+        def retain(self, **kwargs):
+            raise OSError("proxy said no to hsk_live-Secret_123 and gsk_abcDEF456")
+
+    store = HindsightStore(FakeClientBrokenLoop(), "b", "shopfront")
+    with pytest.raises(MemoryUnavailable) as exc:
+        store.history(SIG)
+    assert str(exc.value) == (
+        "Hindsight unreachable (RuntimeError: Timeout context manager should be used inside a task)"
+    )
+    with pytest.raises(MemoryUnavailable) as exc:
+        store.record_failure(RUN, SIG)
+    message = str(exc.value)
+    assert message.startswith("Hindsight unreachable (OSError: proxy said no to [redacted] and [redacted]")
+    assert "hsk_" not in message and "gsk_" not in message and "Secret_123" not in message
+
+
+def test_status_less_error_text_is_truncated():
+    class FakeClientLongError(FakeHindsightClient):
+        def recall(self, **kwargs):
+            raise ConnectionError("x" * 500)
+
+    with pytest.raises(MemoryUnavailable) as exc:
+        HindsightStore(FakeClientLongError(), "b", "shopfront").history(SIG)
+    assert str(exc.value) == f"Hindsight unreachable (ConnectionError: {'x' * 200})"
+
+
+class ThreadRecordingStore(FakeStore):
+    """A FakeStore that notes which thread ran each call, like a client bound to one event loop."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.bank_id = "dejafail-shopfront"
+        self.repo = "shopfront"
+        self.threads: list[str] = []
+        self.built_on = threading.current_thread().name
+
+    def history(self, sig: FailureSignature, limit: int = 12):
+        self.threads.append(threading.current_thread().name)
+        return super().history(sig, limit)
+
+    def record_failure(self, run: CIRun, sig: FailureSignature) -> None:
+        self.threads.append(threading.current_thread().name)
+        super().record_failure(run, sig)
+
+    def ask(self, question: str) -> str:
+        raise MemoryUnavailable("Hindsight request failed with HTTP 503.")
+
+
+def test_thread_confined_store_runs_every_call_on_one_worker_thread():
+    store = ThreadConfinedStore.build(ThreadRecordingStore)
+    try:
+        inner = store._store
+        assert inner.built_on.startswith("hindsight")
+        store.record_failure(RUN, SIG)
+
+        results: list[int] = []
+
+        def caller() -> None:
+            loop = asyncio.new_event_loop()  # each Streamlit session thread has its own event loop
+            asyncio.set_event_loop(loop)
+            try:
+                results.append(len(store.history(SIG)))
+            finally:
+                asyncio.set_event_loop(None)
+                loop.close()
+
+        callers = [threading.Thread(target=caller) for _ in range(4)]
+        for thread in callers:
+            thread.start()
+        for thread in callers:
+            thread.join()
+
+        assert results == [1, 1, 1, 1]
+        assert len(inner.threads) == 5
+        assert set(inner.threads) == {inner.built_on}
+        assert inner.built_on != threading.current_thread().name
+    finally:
+        store.shutdown()
+
+
+def test_thread_confined_store_propagates_exceptions_and_passes_attributes_through():
+    inner = ThreadRecordingStore()
+    store = ThreadConfinedStore(inner)
+    try:
+        with pytest.raises(MemoryUnavailable, match="HTTP 503"):
+            store.ask("anything")
+        assert store.bank_id == "dejafail-shopfront"
+        assert store.repo == "shopfront"
+        assert store.resets == 0
+        store.reset()
+        assert inner.resets == 1
+        with pytest.raises(AttributeError):
+            store.no_such_method
+    finally:
+        store.shutdown()
+
+
+def test_thread_confined_store_works_as_triage_memory():
+    inner = ThreadRecordingStore()
+    inner.record_failure(RUN, SIG)
+    store = ThreadConfinedStore(inner)
+    try:
+        llm = FakeLLM([{"kind": "flaky", "confidence": 0.9, "summary": "Seen before.", "evidence_ids": ["m1"]}])
+        diagnosis = Triage(llm, store, "shopfront").diagnose(
+            "FAILED tests/test_checkout.py::test_checkout_total - AssertionError: "
+            "assert Decimal('0.00') == Decimal('54.97')\n"
+        )
+        assert diagnosis.verdict.used_memory is True
+        assert inner.threads[-1].startswith("hindsight")
+    finally:
+        store.shutdown()

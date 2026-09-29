@@ -1,6 +1,9 @@
 """Hindsight-backed memory of CI failures and their outcomes, plus an in-memory fake."""
 from __future__ import annotations
 
+import functools
+import re
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Any, Callable, Protocol
 
@@ -15,6 +18,7 @@ DIRECTIVE = (
     "Never call a failure flaky if a code change fixed the same failure signature before; "
     "call it a regression instead."
 )
+_SECRET = re.compile(r"(hsk|gsk)_[A-Za-z0-9_\-]+")
 BANK_MISSION = (
     "Remember CI failures, reruns, fixes and developer verdicts for this repository so that "
     "recurring and flaky failures are recognised instantly."
@@ -81,7 +85,8 @@ def _describe(exc: Exception) -> str:
         return "Hindsight Cloud is out of credits (402). Apply the promo code under Billing."
     if status is not None:
         return f"Hindsight request failed with HTTP {status}."
-    return f"Hindsight unreachable ({type(exc).__name__})."
+    text = _SECRET.sub("[redacted]", str(exc))[:200]
+    return f"Hindsight unreachable ({type(exc).__name__}: {text})"
 
 
 def _to_memory(result: Any, exact: bool) -> Memory:
@@ -225,6 +230,51 @@ class HindsightStore:
     def ask(self, question: str) -> str:
         response = self._call(self._client.reflect, bank_id=self.bank_id, query=question, budget="mid")
         return response.text or ""
+
+
+class ThreadConfinedStore:
+    """Runs every call of a wrapped MemoryStore on one dedicated worker thread.
+
+    The Hindsight client runs its async HTTP calls on the calling thread's event loop and keeps one
+    aiohttp session bound to the first loop it used. Streamlit runs each browser session on its own
+    thread with its own loop, so a shared client breaks in every session after the first ("Timeout
+    context manager should be used inside a task"). Build the store on the worker thread with
+    ``build`` so the client and its session live there, and every call goes through that thread.
+    Results are returned and exceptions re-raised in the caller; plain attributes pass through.
+    """
+
+    def __init__(self, store: Any, executor: ThreadPoolExecutor | None = None):
+        self._executor = executor or ThreadPoolExecutor(max_workers=1, thread_name_prefix="hindsight")
+        self._store = store
+
+    @classmethod
+    def build(cls, factory: Callable[..., Any], *args: Any, **kwargs: Any) -> "ThreadConfinedStore":
+        """Construct the store on the worker thread itself, then wrap it."""
+        executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="hindsight")
+        try:
+            store = executor.submit(factory, *args, **kwargs).result()
+        except BaseException:
+            executor.shutdown(wait=False)
+            raise
+        return cls(store, executor)
+
+    def shutdown(self) -> None:
+        """Stop the worker thread once pending calls finish. The store is unusable afterwards."""
+        self._executor.shutdown(wait=False)
+
+    def __getattr__(self, name: str) -> Any:
+        store = self.__dict__.get("_store")
+        if store is None:
+            raise AttributeError(name)
+        attr = getattr(store, name)
+        if not callable(attr):
+            return attr
+
+        @functools.wraps(attr)
+        def on_worker(*args: Any, **kwargs: Any) -> Any:
+            return self._executor.submit(attr, *args, **kwargs).result()
+
+        return on_worker
 
 
 class FakeStore:

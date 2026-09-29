@@ -8,9 +8,9 @@ import streamlit as st
 
 from dejafail.config import ConfigError, load_config
 from dejafail.llm import GroqLLM
-from dejafail.memory import HindsightStore, MemoryUnavailable
+from dejafail.memory import HindsightStore, MemoryUnavailable, ThreadConfinedStore
 from dejafail.models import VERDICT_KINDS, CIRun, Diagnosis, Outcome
-from dejafail.replay import load_runs, load_steps, rolling_accuracy
+from dejafail.replay import load_meta, load_runs, load_steps, rolling_accuracy
 from dejafail.triage import Triage
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -28,11 +28,28 @@ st.set_page_config(page_title="DejaFail", layout="wide")
 
 
 @st.cache_resource
-def services():
+def config_and_llm():
     cfg = load_config()
-    store = HindsightStore.from_config(cfg)
-    store.ensure_bank()
-    return cfg, store, Triage(GroqLLM(cfg.groq_api_key, cfg.groq_model), store, cfg.repo)
+    return cfg, GroqLLM(cfg.groq_api_key, cfg.groq_model, reasoning_effort=cfg.groq_reasoning_effort)
+
+
+@st.cache_resource
+def memory_store() -> ThreadConfinedStore:
+    """One Hindsight worker thread shared by every browser session.
+
+    The Hindsight client binds its HTTP session to the event loop of the thread that first uses it,
+    and Streamlit runs each session on its own thread. So the store is built on a dedicated worker
+    thread and every call, including ensure_bank, runs there. A failure raises and is not cached, so
+    the next rerun tries again.
+    """
+    cfg, _ = config_and_llm()
+    store = ThreadConfinedStore.build(HindsightStore.from_config, cfg)
+    try:
+        store.ensure_bank()
+    except BaseException:
+        store.shutdown()
+        raise
+    return store
 
 
 @st.cache_data
@@ -60,16 +77,20 @@ def verdict_card(title: str, diagnosis: Diagnosis) -> None:
     if v.memory_error:
         st.warning(f"Memory unavailable: {v.memory_error}")
     elif v.used_memory:
+        seen = v.seen_before_count > 0
         if v.evidence:
             st.caption(
                 f"Seen before in {v.seen_before_count} earlier run(s). Evidence the model cited from Hindsight:"
+                if seen
+                else "Not seen before. Similar failures the model cited from Hindsight:"
             )
             for e in v.evidence:
                 st.markdown(f"- `{e.date or 'undated'}` {e.text}")
         elif diagnosis.memories:
             st.caption(
-                f"Seen before in {v.seen_before_count} earlier run(s). "
-                "Recalled from Hindsight (not cited by the model):"
+                f"Seen before in {v.seen_before_count} earlier run(s). Recalled from Hindsight (not cited by the model):"
+                if seen
+                else "Not seen before. Similar failures recalled from Hindsight (not cited by the model):"
             )
             recalled = sorted(diagnosis.memories, key=lambda m: not m.exact)[:5]  # stable: exact matches first
             for m in recalled:
@@ -82,10 +103,17 @@ st.title("DejaFail")
 st.caption("The CI triage agent that remembers every red build. Memory by Hindsight.")
 
 try:
-    cfg, store, triage = services()
-except (ConfigError, MemoryUnavailable) as exc:
+    cfg, llm = config_and_llm()
+except ConfigError as exc:
     st.error(str(exc))
     st.stop()
+try:
+    store: ThreadConfinedStore | None = memory_store()
+    memory_down: str | None = None
+except MemoryUnavailable as exc:
+    store, memory_down = None, str(exc)
+    st.warning(f"Memory unavailable, running stateless: {exc}")
+triage = Triage(llm, store, cfg.repo)  # with no store, the memory card shows the memory warning
 
 tab_triage, tab_curve, tab_learned = st.tabs(["Triage", "Learning curve", "What it learned"])
 
@@ -117,12 +145,15 @@ with tab_triage:
             if st.form_submit_button("Teach"):
                 run = CIRun.adhoc(log)
                 try:
-                    store.record_failure(run, remembered.sig)
-                    store.record_outcome(run, remembered.sig, Outcome(rerun, label, note))
-                    st.success(
-                        f"Learned: {remembered.sig.test_id or 'job failure'} -> {label}. "
-                        "Diagnose a similar failure to see it recalled."
-                    )
+                    if store is None:
+                        st.error(f"Memory unavailable, nothing was learned: {memory_down}")
+                    else:
+                        store.record_failure(run, remembered.sig)
+                        store.record_outcome(run, remembered.sig, Outcome(rerun, label, note))
+                        st.success(
+                            f"Learned: {remembered.sig.test_id or 'job failure'} -> {label}. "
+                            "Diagnose a similar failure to see it recalled."
+                        )
                 except MemoryUnavailable as exc:
                     st.error(str(exc))
 
@@ -133,9 +164,21 @@ with tab_curve:
     else:
         try:
             steps = load_steps(results_path)
-        except (ValueError, TypeError, KeyError):
-            steps = None
+            meta = load_meta(results_path)
+        except (ValueError, TypeError, KeyError, AttributeError):
+            steps, meta = None, {}
             st.warning("Replay results file is incomplete or malformed; rerun the replay.")
+        if meta:
+            st.caption(
+                f"Model: {meta.get('model') or 'unknown'}, "
+                f"reasoning effort: {meta.get('reasoning_effort') or 'model default'}, "
+                f"generated {meta.get('generated_at') or 'at an unknown time'}"
+            )
+        if steps is not None and meta.get("completed") is False:
+            if meta.get("aborted_reason"):
+                st.warning(f"Replay stopped early: {meta['aborted_reason']}. Showing {len(steps)} completed runs.")
+            else:  # the CLI marks the file complete only at the end: still running, or killed
+                st.caption(f"Replay in progress or interrupted: showing {len(steps)} completed runs.")
         if steps is not None and not steps:
             st.info("Replay has no steps yet.")
         elif steps:
@@ -144,6 +187,12 @@ with tab_curve:
             c1.metric("CI runs replayed", len(steps))
             c2.metric("Correct with memory", f"{sum(s.memory_correct for s in steps) / total:.0%}")
             c3.metric("Correct stateless", f"{sum(s.stateless_correct for s in steps) / total:.0%}")
+            bad_memory = sum(1 for s in steps if getattr(s, "memory_llm_error", None))
+            bad_stateless = sum(1 for s in steps if getattr(s, "stateless_llm_error", None))
+            st.caption(
+                f"Invalid model output, counted as unknown: memory {bad_memory} run(s), "
+                f"stateless {bad_stateless} run(s)."
+            )
             frame = pd.DataFrame(rolling_accuracy(steps)).set_index("run")
             frame = frame.rename(columns={"memory": "With Hindsight memory", "stateless": "Stateless LLM"})
             st.line_chart(frame, x_label="CI run (chronological)", y_label="Accuracy, last 8 runs")
@@ -166,23 +215,26 @@ with tab_curve:
 with tab_learned:
     st.subheader("Flaky ledger")
     st.caption("A Hindsight mental model: a consolidated summary the agent keeps up to date from its memories.")
-    try:
-        summary = store.learned_summary()
-    except MemoryUnavailable as exc:
-        summary = ""
-        st.error(str(exc))
-    st.markdown(summary or "_Nothing consolidated yet. Seed or replay history, then refresh._")
-    if st.button("Refresh mental model"):
+    if store is None:
+        st.error(f"Memory unavailable: {memory_down}")
+    else:
         try:
-            store.refresh_summary()
-            st.info("Refresh requested. It can take a minute; reopen this tab to see the new version.")
+            summary = store.learned_summary()
         except MemoryUnavailable as exc:
+            summary = ""
             st.error(str(exc))
-    st.subheader("Ask the ledger")
-    question = st.text_input("Question", placeholder="Which tests should we quarantine, and why?")
-    if st.button("Ask", disabled=not question.strip()):
-        with st.spinner("Reflecting over memory..."):
+        st.markdown(summary or "_Nothing consolidated yet. Seed or replay history, then refresh._")
+        if st.button("Refresh mental model"):
             try:
-                st.markdown(store.ask(question))
+                store.refresh_summary()
+                st.info("Refresh requested. It can take a minute; reopen this tab to see the new version.")
             except MemoryUnavailable as exc:
                 st.error(str(exc))
+        st.subheader("Ask the ledger")
+        question = st.text_input("Question", placeholder="Which tests should we quarantine, and why?")
+        if st.button("Ask", disabled=not question.strip()):
+            with st.spinner("Reflecting over memory..."):
+                try:
+                    st.markdown(store.ask(question))
+                except MemoryUnavailable as exc:
+                    st.error(str(exc))
