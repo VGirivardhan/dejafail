@@ -26,6 +26,26 @@ The UI runs the same log through a stateless LLM and through DejaFail side by si
 | Directive | `DIRECTIVE` | Rule "never call a failure flaky if a code change fixed the same signature before". Hindsight applies it to `reflect` answers ("Ask the ledger") and to the Flaky ledger mental model; the triage prompt carries the same rule for the verdicts |
 | `reflect` | `HindsightStore.ask` | "Ask the ledger": e.g. *Which tests should we quarantine?* |
 
+## Results
+
+We replayed the 48-run synthetic `shopfront` history in chronological order, diagnosing each run with and without memory before its developer-confirmed outcome was stored. Model: `openai/gpt-oss-120b` (reasoning effort low), single run; raw results are in `data/shopfront/replay_results.json`.
+
+![Learning curve](docs/images/learning_curve.png)
+
+| Truth label | Runs | With memory (correct) | Stateless (correct) |
+|---|---|---|---|
+| flaky | 17 | 15 | 0 |
+| infra | 12 | 8 | 12 |
+| dependency | 9 | 9 | 9 |
+| regression | 10 | 9 | 10 |
+| **Overall** | **48** | **41 (85%)** | **31 (65%)** |
+
+Live side by side on `data/shopfront/demo_logs/01_checkout_flaky_again.log`: the stateless model says REGRESSION, DejaFail says FLAKY, citing 13 earlier runs.
+
+**What memory got wrong.** First occurrences get no help from memory. 4 of the 12 infra failures (three Stripe DNS blips and a job timeout, all of which passed on rerun) were called flaky, while the stateless model got all 12 infra runs right. The first `KeyError` in `test_checkout_total`, a test that usually fails flaky, was also called flaky; one developer correction fixed the next occurrence.
+
+These numbers come from our own synthetic replay of a fictional repository, not from production CI.
+
 ## Quickstart
 
 ```bash
