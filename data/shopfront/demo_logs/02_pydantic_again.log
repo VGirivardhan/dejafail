@@ -1,0 +1,49 @@
+2026-09-29T10:42:00.4691292Z ##[group]Run pip install -r requirements.txt
+2026-09-29T10:42:00.2047447Z Collecting pydantic>=1.10 (from -r requirements.txt (line 7))
+2026-09-29T10:42:01.6805686Z   Downloading pydantic-2.11.3-py3-none-any.whl.metadata (149 kB)
+2026-09-29T10:42:01.9086501Z Successfully installed annotated-types-0.7.0 pydantic-2.11.3 pydantic-core-2.23.4 typing-extensions-4.12.2
+2026-09-29T10:42:01.3815694Z ##[group]Run pytest -n 4 --maxfail=5 -q
+2026-09-29T10:42:02.3808984Z ============================= test session starts ==============================
+2026-09-29T10:42:02.9610684Z platform linux -- Python 3.11.9, pytest-8.3.2, pluggy-1.5.0
+2026-09-29T10:42:03.6654050Z rootdir: /home/runner/work/shopfront/shopfront
+2026-09-29T10:42:03.0310526Z plugins: xdist-3.6.1, cov-5.0.0, anyio-4.4.0
+2026-09-29T10:42:04.6522054Z collected 0 items / 3 errors
+2026-09-29T10:42:04.7054552Z 
+2026-09-29T10:42:05.8818363Z ==================================== ERRORS ====================================
+2026-09-29T10:42:05.6637628Z _________________ ERROR collecting tests/test_api_cart.py _________________
+2026-09-29T10:42:05.6094402Z ImportError while importing test module '/home/runner/work/shopfront/shopfront/tests/test_api_cart.py'.
+2026-09-29T10:42:05.6722744Z Traceback:
+2026-09-29T10:42:06.5621752Z tests/test_api_cart.py:4: in <module>
+2026-09-29T10:42:06.7307851Z     from shopfront.api import create_app
+2026-09-29T10:42:07.9469472Z shopfront/config.py:3: in <module>
+2026-09-29T10:42:08.5379273Z     from pydantic import BaseSettings
+2026-09-29T10:42:09.6720819Z .venv/lib/python3.11/site-packages/pydantic/__init__.py:380: in __getattr__
+2026-09-29T10:42:10.9413372Z     return _getattr_migration(attr_name)
+2026-09-29T10:42:10.5450577Z E   pydantic.errors.PydanticImportError: `BaseSettings` has been moved to the `pydantic-settings` package. See https://errors.pydantic.dev/2.11/u/import-error for more details.
+2026-09-29T10:42:10.2460029Z _________________ ERROR collecting tests/test_api_orders.py _________________
+2026-09-29T10:42:11.5929401Z ImportError while importing test module '/home/runner/work/shopfront/shopfront/tests/test_api_orders.py'.
+2026-09-29T10:42:11.7082269Z Traceback:
+2026-09-29T10:42:12.0193852Z tests/test_api_orders.py:4: in <module>
+2026-09-29T10:42:12.1829143Z     from shopfront.api import create_app
+2026-09-29T10:42:13.3145657Z shopfront/config.py:3: in <module>
+2026-09-29T10:42:13.5441694Z     from pydantic import BaseSettings
+2026-09-29T10:42:13.3368611Z .venv/lib/python3.11/site-packages/pydantic/__init__.py:402: in __getattr__
+2026-09-29T10:42:14.0349434Z     return _getattr_migration(attr_name)
+2026-09-29T10:42:14.2338856Z E   pydantic.errors.PydanticImportError: `BaseSettings` has been moved to the `pydantic-settings` package. See https://errors.pydantic.dev/2.11/u/import-error for more details.
+2026-09-29T10:42:15.6661421Z _________________ ERROR collecting tests/test_settings.py _________________
+2026-09-29T10:42:15.7612348Z ImportError while importing test module '/home/runner/work/shopfront/shopfront/tests/test_settings.py'.
+2026-09-29T10:42:16.0784533Z Traceback:
+2026-09-29T10:42:17.0675564Z tests/test_settings.py:4: in <module>
+2026-09-29T10:42:17.4458914Z     from shopfront.api import create_app
+2026-09-29T10:42:18.4587446Z shopfront/config.py:3: in <module>
+2026-09-29T10:42:18.9097519Z     from pydantic import BaseSettings
+2026-09-29T10:42:19.0600266Z .venv/lib/python3.11/site-packages/pydantic/__init__.py:402: in __getattr__
+2026-09-29T10:42:20.1686180Z     return _getattr_migration(attr_name)
+2026-09-29T10:42:20.2041780Z E   pydantic.errors.PydanticImportError: `BaseSettings` has been moved to the `pydantic-settings` package. See https://errors.pydantic.dev/2.11/u/import-error for more details.
+2026-09-29T10:42:21.0229298Z =========================== short test summary info ============================
+2026-09-29T10:42:21.3970367Z ERROR tests/test_api_cart.py - pydantic.errors.PydanticImportError: `BaseSettings` has been moved to the `pydantic-settings` package. See https://errors.pydantic.dev/2.11/u/import-error for more details.
+2026-09-29T10:42:21.4823832Z ERROR tests/test_api_orders.py - pydantic.errors.PydanticImportError: `BaseSettings` has been moved to the `pydantic-settings` package. See https://errors.pydantic.dev/2.11/u/import-error for more details.
+2026-09-29T10:42:21.5123958Z ERROR tests/test_settings.py - pydantic.errors.PydanticImportError: `BaseSettings` has been moved to the `pydantic-settings` package. See https://errors.pydantic.dev/2.11/u/import-error for more details.
+2026-09-29T10:42:22.2801430Z !!!!!!!!!!!!!!!!!!! Interrupted: 3 errors during collection !!!!!!!!!!!!!!!!!!!
+2026-09-29T10:42:22.1012325Z ============================== 3 errors in 2.67s ===============================
+2026-09-29T10:42:22.8619779Z ##[error]Process completed with exit code 2.

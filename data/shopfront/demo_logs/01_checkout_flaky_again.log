@@ -1,0 +1,24 @@
+2026-09-29T10:12:00.5385130Z ##[group]Run pytest -n 4 --maxfail=5 -q
+2026-09-29T10:12:01.6398647Z ============================= test session starts ==============================
+2026-09-29T10:12:02.1026899Z platform linux -- Python 3.11.9, pytest-8.3.2, pluggy-1.5.0
+2026-09-29T10:12:02.1806714Z rootdir: /home/runner/work/shopfront/shopfront
+2026-09-29T10:12:03.8301425Z plugins: xdist-3.6.1, cov-5.0.0, anyio-4.4.0
+2026-09-29T10:12:03.8611981Z 4 workers [212 items]
+2026-09-29T10:12:03.8900489Z 
+2026-09-29T10:12:04.9014925Z =================================== FAILURES ===================================
+2026-09-29T10:12:04.0347083Z _____________________________ test_checkout_total ______________________________
+2026-09-29T10:12:04.1486229Z [gw2] linux -- Python 3.11.9 /opt/hostedtoolcache/Python/3.11.9/x64/bin/python
+2026-09-29T10:12:05.3060060Z 
+2026-09-29T10:12:05.1722607Z tmp_db = <sqlite3.Connection object at 0x7f2484000732>
+2026-09-29T10:12:05.4201989Z 
+2026-09-29T10:12:06.0504550Z     def test_checkout_total(tmp_db):
+2026-09-29T10:12:06.1618521Z         cart = seed_cart(tmp_db, items=[("SKU-1042", 2), ("SKU-2210", 1)])
+2026-09-29T10:12:07.3272982Z >       assert checkout_total(tmp_db, cart.id) == Decimal("54.97")
+2026-09-29T10:12:07.0296744Z E       AssertionError: assert Decimal('0.00') == Decimal('54.97')
+2026-09-29T10:12:08.9671771Z E        +  where Decimal('0.00') = checkout_total(<sqlite3.Connection object at 0x7f2484000732>, 223)
+2026-09-29T10:12:08.8772995Z 
+2026-09-29T10:12:08.7452646Z tests/test_checkout.py:47: AssertionError
+2026-09-29T10:12:08.5883765Z =========================== short test summary info ============================
+2026-09-29T10:12:09.1575485Z FAILED tests/test_checkout.py::test_checkout_total - AssertionError: assert Decimal('0.00') == Decimal('54.97')
+2026-09-29T10:12:10.3002641Z =================== 1 failed, 211 passed in 43.72s ===================
+2026-09-29T10:12:10.4580399Z ##[error]Process completed with exit code 1.

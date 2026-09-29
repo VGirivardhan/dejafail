@@ -1,0 +1,18 @@
+2026-09-29T11:12:00.7825183Z ##[group]Run pytest -n 4 --maxfail=5 -q
+2026-09-29T11:12:00.8956206Z ============================= test session starts ==============================
+2026-09-29T11:12:00.7381591Z platform linux -- Python 3.11.9, pytest-8.3.2, pluggy-1.5.0
+2026-09-29T11:12:00.8583768Z rootdir: /home/runner/work/shopfront/shopfront
+2026-09-29T11:12:01.4925781Z plugins: xdist-3.6.1, cov-5.0.0, anyio-4.4.0
+2026-09-29T11:12:01.9686241Z 4 workers [212 items]
+2026-09-29T11:12:01.4598836Z 
+2026-09-29T11:12:02.1473831Z =================================== FAILURES ===================================
+2026-09-29T11:12:02.9165638Z ____________________________ test_session_roundtrip ____________________________
+2026-09-29T11:12:03.7619227Z     def test_session_roundtrip(redis_client):
+2026-09-29T11:12:03.9566020Z >       redis_client.set("session:42", "cart-1042")
+2026-09-29T11:12:03.6486934Z E       redis.exceptions.ConnectionError: Error 111 connecting to localhost:6379. Connection refused.
+2026-09-29T11:12:04.9203546Z 
+2026-09-29T11:12:04.6154113Z tests/test_sessions.py:12: ConnectionError
+2026-09-29T11:12:05.9194413Z =========================== short test summary info ============================
+2026-09-29T11:12:05.8017090Z FAILED tests/test_sessions.py::test_session_roundtrip - redis.exceptions.ConnectionError: Error 111 connecting to localhost:6379. Connection refused.
+2026-09-29T11:12:06.5209401Z =================== 1 failed, 211 passed in 45.21s ===================
+2026-09-29T11:12:06.4064355Z ##[error]Process completed with exit code 1.
