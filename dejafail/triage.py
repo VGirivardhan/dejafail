@@ -1,6 +1,7 @@
 """The DejaFail agent: failure signature, then Hindsight recall, then an LLM verdict."""
 from __future__ import annotations
 
+import math
 from typing import Any, Sequence
 
 from .llm import LLM, LLMError
@@ -46,16 +47,24 @@ def validate_verdict_json(obj: dict[str, Any]) -> None:
     if kind not in VERDICT_KINDS:
         raise ValueError(f"kind must be one of {', '.join(VERDICT_KINDS)}, got {kind!r}")
     try:
-        float(obj.get("confidence", 0))
+        conf = float(obj.get("confidence", 0))
+        if not math.isfinite(conf):
+            raise ValueError("confidence must be finite (not NaN or inf)")
     except (TypeError, ValueError) as exc:
         raise ValueError("confidence must be a number between 0 and 1") from exc
     if not str(obj.get("summary", "")).strip():
         raise ValueError("summary must be a non-empty string")
+    evidence_ids = obj.get("evidence_ids")
+    if evidence_ids is not None and not isinstance(evidence_ids, (list, str)):
+        raise ValueError("evidence_ids must be a list or string, or absent")
 
 
 def verdict_from_json(obj: dict[str, Any], aliases: dict[str, Memory]) -> Verdict:
     evidence: list[Evidence] = []
-    for ref in obj.get("evidence_ids") or []:
+    evidence_ids = obj.get("evidence_ids") or []
+    if isinstance(evidence_ids, str):
+        evidence_ids = [evidence_ids]
+    for ref in evidence_ids:
         memory = aliases.get(str(ref).strip().strip("[]"))
         if memory is not None and all(e.memory_id != memory.id for e in evidence):
             evidence.append(Evidence(memory_id=memory.id, date=memory.date, text=memory.text))
@@ -63,7 +72,7 @@ def verdict_from_json(obj: dict[str, Any], aliases: dict[str, Memory]) -> Verdic
         kind=str(obj["kind"]).strip().lower(),
         confidence=min(max(float(obj.get("confidence", 0)), 0.0), 1.0),
         summary=str(obj["summary"]).strip(),
-        next_action=str(obj.get("next_action", "")).strip() or "Inspect the log excerpt.",
+        next_action=str(obj.get("next_action") or "").strip() or "Inspect the log excerpt.",
         evidence=evidence,
     )
 

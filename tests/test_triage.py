@@ -80,3 +80,28 @@ def test_confidence_is_clamped_and_kind_normalised():
 def test_validate_rejects_bad_objects(bad):
     with pytest.raises(ValueError):
         validate_verdict_json(bad)
+
+
+def test_malformed_evidence_ids_int_returns_unknown():
+    llm = FakeLLM([LLMOutputError("validation failed"), dict(GOOD, evidence_ids=[])])
+    d = Triage(llm, FakeStore()).diagnose(LOG)
+    assert d.verdict.kind == "unknown"
+
+
+def test_evidence_ids_as_string_maps_to_one_item():
+    llm = FakeLLM([dict(GOOD, evidence_ids="m1")])
+    d = Triage(llm, _seeded_store(2)).diagnose(LOG, use_memory=True)
+    assert len(d.verdict.evidence) == 1
+    assert "Passed on rerun." in d.verdict.evidence[0].text
+
+
+def test_validate_rejects_nan_confidence():
+    bad = {"kind": "flaky", "summary": "x", "confidence": float("nan")}
+    with pytest.raises(ValueError):
+        validate_verdict_json(bad)
+
+
+def test_next_action_null_yields_default_text():
+    llm = FakeLLM([dict(GOOD, next_action=None, evidence_ids=[])])
+    d = Triage(llm, FakeStore()).diagnose(LOG, use_memory=False)
+    assert d.verdict.next_action == "Inspect the log excerpt."
