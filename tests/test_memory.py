@@ -90,6 +90,15 @@ def test_history_respects_limit():
     assert len(HindsightStore(client, "b", "shopfront").history(SIG, limit=5)) == 5
 
 
+def test_tagged_recall_has_4096_token_budget():
+    """Test that the tagged history recall uses a 4096-token budget."""
+    client = FakeHindsightClient(recall_batches=[[], []])
+    HindsightStore(client, "b", "shopfront").history(SIG)
+    # First recall call is the tagged one
+    first_recall = client.calls[0][1]
+    assert first_recall["max_tokens"] == 4096
+
+
 @pytest.mark.parametrize("status,needle", [(401, "HINDSIGHT_API_KEY"), (402, "credits"), (503, "503")])
 def test_api_errors_become_memory_unavailable_with_readable_message(status, needle):
     client = FakeHindsightClient(fail_status=status)

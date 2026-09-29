@@ -197,7 +197,7 @@ class HindsightStore:
             tags=signature_tags(sig),
             tags_match="any_strict",
             budget="mid",
-            max_tokens=2048,
+            max_tokens=4096,
         )
         similar = self._call(
             self._client.recall, bank_id=self.bank_id, query=about, budget="low", max_tokens=1024
