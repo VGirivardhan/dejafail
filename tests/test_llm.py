@@ -100,3 +100,23 @@ def test_completion_cap_is_configurable():
     client = fake_openai_client(['{"kind": "flaky"}'])
     GroqLLM(api_key="unused", client=client, max_completion_tokens=512).complete_json("sys", "user")
     assert client.chat.completions.requests[0]["max_completion_tokens"] == 512
+
+
+def test_non_json_400_is_not_retried_and_becomes_unavailable():
+    rejected = _bare(openai.BadRequestError, "Error code: 400 - model_decommissioned", status_code=400,
+                     code="model_decommissioned")
+    client = fake_openai_client([rejected, '{"kind": "infra"}'])
+    llm = GroqLLM(api_key="unused", client=client)
+    with pytest.raises(LLMUnavailable) as exc:
+        llm.complete_json("sys", "user")
+    assert "Groq rejected the request (400)" in str(exc.value)
+    assert "model_decommissioned" in str(exc.value)
+    assert len(client.chat.completions.requests) == 1
+
+
+def test_json_validate_failed_400_is_recognised_by_its_error_code():
+    bad = _bare(openai.BadRequestError, "Error code: 400 - Failed to generate JSON", status_code=400,
+                code="json_validate_failed")
+    client = fake_openai_client([bad, '{"kind": "infra"}'])
+    assert GroqLLM(api_key="unused", client=client).complete_json("sys", "user") == {"kind": "infra"}
+    assert len(client.chat.completions.requests) == 2

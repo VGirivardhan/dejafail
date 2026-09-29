@@ -47,6 +47,10 @@ def parse_json_object(text: str) -> dict[str, Any]:
     return obj
 
 
+def _is_json_validate_failed(exc: Exception) -> bool:
+    return getattr(exc, "code", None) == "json_validate_failed" or "json_validate_failed" in str(exc)
+
+
 def effective_reasoning_effort(model: str, reasoning_effort: str | None) -> str | None:
     """The reasoning_effort actually sent to Groq: only gpt-oss models accept it, and only when set."""
     if model.startswith("openai/gpt-oss") and reasoning_effort:
@@ -97,9 +101,11 @@ class GroqLLM:
                 )
             except openai.APIStatusError as exc:
                 if getattr(exc, "status_code", None) == 400:
-                    # Groq rejects malformed JSON-mode output with a 400 (json_validate_failed).
-                    last_error = str(exc)
-                    continue
+                    if _is_json_validate_failed(exc):
+                        # Groq rejects malformed JSON-mode output with a 400 (json_validate_failed).
+                        last_error = str(exc)
+                        continue
+                    raise LLMUnavailable(f"Groq rejected the request (400): {exc}") from exc
                 raise LLMUnavailable(f"Groq request failed: {exc}") from exc
             except openai.APIError as exc:
                 raise LLMUnavailable(f"Groq unreachable: {exc}") from exc
