@@ -8,7 +8,7 @@ A single failed CI log cannot tell you whether a test is flaky or actually broke
 
 ## What it does
 
-1. **Parses** a failing CI log into a stable failure signature (test id, error type, normalised message). Addresses, paths, hashes and timings are stripped so the same failure always gets the same signature.
+1. **Parses** a failing CI log into a stable failure signature (the test id plus a hash of the error type and normalised message; the hash does not include the test id). Addresses, paths, hashes and timings are stripped so the same failure always gets the same signature.
 2. **Recalls** earlier runs of that failure from Hindsight: exact matches by signature/test tag plus semantically similar errors.
 3. **Decides** `flaky`, `regression`, `dependency`, `infra` or `unknown` with an LLM (Groq), citing the dated memories it used.
 4. **Learns**: you confirm or correct the verdict and add the fix; DejaFail retains it, so the next similar failure is answered from memory.
@@ -47,6 +47,8 @@ python -m dejafail seed --until 2026-09-20      # load history without LLM calls
 python -m dejafail ask "Which tests should we quarantine?"
 ```
 
+Note: `seed` and `replay` reset the `dejafail-shopfront` bank (delete taught feedback).
+
 ## Architecture
 
 ```
@@ -59,7 +61,7 @@ CI log -> signature.py -> triage.py -> llm.py (Groq, JSON mode, validated + retr
 
 ## Data
 
-`data/shopfront/runs.jsonl` is a synthetic three-week CI history of a fictional checkout service (48 failing runs), generated deterministically by `scripts/build_dataset.py`. It plants realistic recurring patterns: a pair of flaky tests sharing a temp database, a pydantic 2 upgrade break that returns two weeks later, an arm64 runner that keeps running out of disk, a real rounding regression, and one-off failures. Each run carries the ground-truth label used to score the learning curve. Accuracy numbers shown in the UI come from this synthetic replay.
+`data/shopfront/runs.jsonl` is a synthetic three-week CI history of a fictional checkout service (48 failing runs), generated deterministically by `scripts/build_dataset.py`. It plants realistic recurring patterns: a pair of flaky tests sharing a temp database, a pydantic 2 upgrade break that returns eleven days later, an arm64 runner that keeps running out of disk, a real rounding regression, and one-off failures. Each run carries the ground-truth label used to score the learning curve. Accuracy numbers shown in the UI come from this synthetic replay.
 
 ## Tests
 
@@ -71,7 +73,7 @@ python scripts/smoke_live.py # one real round trip (needs .env)
 ## Limitations
 
 - The failure parser covers pytest, Jest, JUnit, npm and GitHub Actions error lines; other runners fall back to the first `...Error:` line.
-- Memory quality depends on consistent signatures; a test that fails with a new message starts a new history (by design: it may be a real bug).
+- A failure with a new message gets a new signature hash; DejaFail still recalls the test's earlier runs through the test tag and semantic recall, so the model sees that history but must judge whether the new error is the same problem (the planted KeyError in test_checkout_total is exactly this case).
 - Verdicts are advisory. DejaFail never reruns or quarantines tests on its own.
 
 ## Links
