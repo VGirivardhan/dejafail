@@ -58,7 +58,10 @@ def main() -> int:
                 print("SMOKE OK")
                 return 0
         finally:
-            store._client.delete_bank(SMOKE_BANK)
+            try:
+                store._client.delete_bank(SMOKE_BANK)
+            except Exception as exc:
+                print(f"warning: could not delete bank {SMOKE_BANK}: {type(exc).__name__}", file=sys.stderr)
     except ConfigError as e:
         print(f"SMOKE FAILED: {e}")
         return 2
@@ -66,6 +69,9 @@ def main() -> int:
         print(f"SMOKE FAILED: {e}")
         return 2
     except LLMError as e:
+        print(f"SMOKE FAILED: {e}")
+        return 2
+    except OSError as e:
         print(f"SMOKE FAILED: {e}")
         return 2
 
