@@ -1,0 +1,82 @@
+import pytest
+
+from dejafail.llm import LLMOutputError
+from dejafail.memory import FakeStore, MemoryUnavailable
+from dejafail.models import CIRun, Outcome
+from dejafail.signature import extract_signature
+from dejafail.triage import Triage, validate_verdict_json
+from tests.fakes import FakeLLM
+
+LOG = "FAILED tests/test_checkout.py::test_checkout_total - AssertionError: assert Decimal('0.00') == Decimal('54.97')\n"
+GOOD = {"kind": "flaky", "confidence": 0.9, "summary": "Known flaky test.", "next_action": "Rerun.", "evidence_ids": ["m1", "m99"]}
+
+
+def _seeded_store(times: int) -> FakeStore:
+    store = FakeStore()
+    sig = extract_signature(LOG)
+    for i in range(times):
+        run = CIRun(f"run-2{i:02d}", f"2026-09-1{i}T09:00:00+00:00", "main", "x64", "c" * 40, LOG, "flaky",
+                    Outcome(True, "flaky", "Passed on rerun."))
+        store.record_failure(run, sig)
+        store.record_outcome(run, sig, run.outcome)
+    return store
+
+
+def test_stateless_prompt_has_no_memory_section():
+    llm = FakeLLM([dict(GOOD, evidence_ids=[])])
+    d = Triage(llm, _seeded_store(2)).diagnose(LOG, use_memory=False)
+    assert "PAST MEMORIES" not in llm.prompts[0][1]
+    assert d.verdict.used_memory is False
+    assert d.verdict.evidence == []
+
+
+def test_memory_prompt_lists_memories_and_maps_only_real_evidence():
+    llm = FakeLLM([GOOD])
+    d = Triage(llm, _seeded_store(2)).diagnose(LOG, use_memory=True)
+    prompt = llm.prompts[0][1]
+    assert "PAST MEMORIES" in prompt and "[m1]" in prompt and "Passed on rerun." in prompt
+    assert d.verdict.kind == "flaky"
+    assert len(d.verdict.evidence) == 1  # m99 was never recalled, so it is dropped
+    assert d.verdict.seen_before_count == 2
+    assert d.verdict.used_memory is True
+    assert len(d.memories) == 4
+
+
+def test_unseen_failure_says_so_in_prompt():
+    llm = FakeLLM([dict(GOOD, evidence_ids=[])])
+    d = Triage(llm, FakeStore()).diagnose(LOG, use_memory=True)
+    assert "has not been seen before" in llm.prompts[0][1]
+    assert d.verdict.seen_before_count == 0
+
+
+def test_invalid_llm_output_becomes_unknown_verdict():
+    llm = FakeLLM([LLMOutputError("no JSON object in model output")])
+    d = Triage(llm, FakeStore()).diagnose(LOG)
+    assert d.verdict.kind == "unknown"
+    assert "no JSON object" in d.verdict.summary
+
+
+def test_memory_outage_falls_back_to_stateless_with_error():
+    class DownStore(FakeStore):
+        def history(self, sig, limit=12):
+            raise MemoryUnavailable("Hindsight Cloud is out of credits (402).")
+
+    llm = FakeLLM([dict(GOOD, evidence_ids=[])])
+    d = Triage(llm, DownStore()).diagnose(LOG, use_memory=True)
+    assert "PAST MEMORIES" not in llm.prompts[0][1]
+    assert d.verdict.used_memory is False
+    assert "402" in d.verdict.memory_error
+
+
+def test_confidence_is_clamped_and_kind_normalised():
+    llm = FakeLLM([dict(GOOD, kind=" Flaky ", confidence=7, evidence_ids=[])])
+    d = Triage(llm, FakeStore()).diagnose(LOG, use_memory=False)
+    assert d.verdict.kind == "flaky"
+    assert d.verdict.confidence == 1.0
+
+
+@pytest.mark.parametrize("bad", [{"kind": "maybe", "summary": "x"}, {"kind": "flaky", "summary": ""},
+                                 {"kind": "flaky", "summary": "x", "confidence": "high"}])
+def test_validate_rejects_bad_objects(bad):
+    with pytest.raises(ValueError):
+        validate_verdict_json(bad)
