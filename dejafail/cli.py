@@ -12,6 +12,7 @@ from .models import VERDICT_KINDS, CIRun, Diagnosis, Outcome
 DATA_DIR = Path(__file__).resolve().parent.parent / "data" / "shopfront"
 DEFAULT_RUNS = DATA_DIR / "runs.jsonl"
 DEFAULT_RESULTS = DATA_DIR / "replay_results.json"
+RECALLED_SHOWN = 5  # recalled memories listed when the model cited none
 
 
 def configure_output() -> None:
@@ -32,6 +33,10 @@ def format_diagnosis(title: str, diagnosis: Diagnosis) -> str:
     if v.used_memory:
         lines.append(f"seen before: {v.seen_before_count} earlier run(s)")
         lines += [f"  - [{e.date or 'undated'}] {e.text}" for e in v.evidence]
+        if not v.evidence and diagnosis.memories:
+            recalled = sorted(diagnosis.memories, key=lambda m: not m.exact)[:RECALLED_SHOWN]
+            lines.append("  (recalled, not cited by the model)")
+            lines += [f"  - [{m.date or 'undated'}] {m.text}" for m in recalled]
     if v.memory_error:
         lines.append(f"memory:      unavailable ({v.memory_error})")
     return "\n".join(lines)

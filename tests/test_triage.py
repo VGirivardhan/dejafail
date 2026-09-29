@@ -147,3 +147,54 @@ def test_successful_verdict_has_no_llm_error():
     llm = FakeLLM([dict(GOOD, evidence_ids=[])])
     d = Triage(llm, FakeStore()).diagnose(LOG, use_memory=False)
     assert d.verdict.llm_error is None
+
+
+def test_prompt_holds_at_most_twelve_memories_but_every_seen_run_is_counted():
+    from dejafail.triage import PROMPT_MEMORIES
+
+    llm = FakeLLM([dict(GOOD, evidence_ids=[])])
+    d = Triage(llm, _seeded_store(20)).diagnose(LOG, use_memory=True)
+    memory_lines = [line for line in llm.prompts[0][1].splitlines() if line.startswith("[m")]
+    assert PROMPT_MEMORIES == 12
+    assert len(memory_lines) == 12
+    assert d.verdict.seen_before_count == 20
+    assert len(d.memories) == 40
+
+
+def test_history_is_asked_for_forty_memories():
+    class Recording(FakeStore):
+        def history(self, sig, limit=12):
+            self.limit = limit
+            return []
+
+    store = Recording()
+    Triage(FakeLLM([dict(GOOD, evidence_ids=[])]), store).diagnose(LOG, use_memory=True)
+    assert store.limit == 40
+
+
+def test_memories_beyond_the_prompt_cannot_be_cited():
+    llm = FakeLLM([dict(GOOD, evidence_ids=["m12", "m13"])])
+    d = Triage(llm, _seeded_store(20)).diagnose(LOG, use_memory=True)
+    assert len(d.verdict.evidence) == 1
+    assert d.verdict.evidence[0].memory_id == d.memories[11].id
+
+
+def test_count_seen_merges_outcome_run_ids_and_skips_missing_ones():
+    from dejafail.models import Memory
+    from dejafail.triage import count_seen
+
+    memories = [
+        Memory("a", "failure", run_id="run-1", exact=True),
+        Memory("b", "outcome", run_id="run-1-outcome", exact=True),
+        Memory("c", "no run id", run_id=None, exact=True),
+        Memory("d", "similar only", run_id="run-2", exact=False),
+        Memory("e", "failure", run_id="run-3", exact=True),
+    ]
+    assert count_seen(memories) == 2
+
+
+def test_count_seen_does_not_fall_back_to_the_memory_id():
+    from dejafail.models import Memory
+    from dejafail.triage import count_seen
+
+    assert count_seen([Memory("mem-1", "x", run_id=None, exact=True)]) == 0

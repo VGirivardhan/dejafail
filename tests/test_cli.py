@@ -157,3 +157,32 @@ def test_replay_meta_reasoning_effort_is_null_for_models_that_do_not_take_it(mon
     meta = load_meta(out)
     assert meta["model"] == "qwen/qwen3-32b"
     assert meta["reasoning_effort"] is None
+
+
+def _recalled(count):
+    from dejafail.models import Memory
+
+    return tuple(Memory(f"id{i}", f"similar failure {i}", f"2026-09-0{i}", exact=(i % 2 == 0))
+                 for i in range(1, count + 1))
+
+
+def test_format_diagnosis_lists_recalled_memories_when_the_model_cites_none():
+    verdict = Verdict("regression", 0.6, "s", "a", used_memory=True)
+    lines = cli.format_diagnosis("x", Diagnosis(SIG, verdict, _recalled(7))).splitlines()
+    start = lines.index("  (recalled, not cited by the model)")
+    assert lines[start + 1:] == [
+        "  - [2026-09-02] similar failure 2",
+        "  - [2026-09-04] similar failure 4",
+        "  - [2026-09-06] similar failure 6",
+        "  - [2026-09-01] similar failure 1",
+        "  - [2026-09-03] similar failure 3",
+    ]
+
+
+def test_format_diagnosis_skips_the_recalled_list_when_evidence_is_cited_or_memory_is_off():
+    cited = Verdict("flaky", 0.9, "s", "a", [Evidence("id1", "2026-09-01", "similar failure 1")], used_memory=True)
+    stateless = Verdict("flaky", 0.9, "s", "a")
+    for verdict in (cited, stateless):
+        assert "not cited by the model" not in cli.format_diagnosis("x", Diagnosis(SIG, verdict, _recalled(3)))
+    empty = Verdict("flaky", 0.9, "s", "a", used_memory=True)
+    assert "not cited by the model" not in cli.format_diagnosis("x", Diagnosis(SIG, empty))

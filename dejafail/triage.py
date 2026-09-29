@@ -12,6 +12,8 @@ from .signature import extract_signature
 ERROR_TEXT_LIMIT = 300  # characters of an LLM error kept in a verdict's summary and llm_error
 UNAVAILABLE = "unavailable: "  # Verdict.llm_error prefix: Groq could not answer (network, rate limit, 4xx/5xx)
 INVALID_OUTPUT = "invalid output: "  # Verdict.llm_error prefix: the model never produced a valid verdict
+RECALL_LIMIT = 40  # memories recalled per failure; all of them feed the seen-before count
+PROMPT_MEMORIES = 12  # of those, how many go into the prompt (Groq free tier: 8K tokens/minute)
 
 SYSTEM_PROMPT = """You are DejaFail, a CI failure triage assistant for the repository "{repo}".
 Classify the failing CI run into exactly one kind:
@@ -98,8 +100,11 @@ def failed_verdict(exc: Exception, prefix: str) -> Verdict:
 
 
 def count_seen(memories: Sequence[Memory]) -> int:
-    """Distinct earlier runs that share this failure's signature or test."""
-    return len({m.run_id or m.id for m in memories if m.exact})
+    """Distinct earlier runs that share this failure's signature or test.
+
+    A run's failure and its outcome ("<run_id>-outcome") count once; memories without a run id are skipped.
+    """
+    return len({m.run_id.removesuffix("-outcome") for m in memories if m.exact and m.run_id})
 
 
 class Triage:
@@ -117,10 +122,10 @@ class Triage:
                 memory_error = "memory disabled"
             else:
                 try:
-                    memories = self.memory.history(sig)
+                    memories = self.memory.history(sig, limit=RECALL_LIMIT)
                 except MemoryUnavailable as exc:
                     memory_error = str(exc)
-        aliases = {f"m{i}": m for i, m in enumerate(memories, start=1)}
+        aliases = {f"m{i}": m for i, m in enumerate(memories[:PROMPT_MEMORIES], start=1)}
         with_memory = use_memory and memory_error is None
         prompt = build_user_prompt(sig, aliases if with_memory else None)
         try:
