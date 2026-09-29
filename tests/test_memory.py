@@ -11,7 +11,7 @@ from dejafail.memory import (
     outcome_text,
 )
 from dejafail.models import CIRun, FailureSignature, Outcome
-from tests.fakes import FakeHindsightClient, recall_result
+from tests.fakes import FakeApiError, FakeHindsightClient, recall_result
 
 SIG = FailureSignature(
     test_id="tests/test_checkout.py::test_checkout_total",
@@ -170,8 +170,9 @@ def test_ensure_bank_retries_after_directive_partial_failure():
     store = HindsightStore(client, "b", "shopfront")
 
     # First call: create_directive fails with 503
-    with pytest.raises(MemoryUnavailable):
+    with pytest.raises(MemoryUnavailable) as exc:
         store.ensure_bank()
+    assert "503" in str(exc.value)
 
     # Second call: both create_directive and create_mental_model should be attempted
     store.ensure_bank()
